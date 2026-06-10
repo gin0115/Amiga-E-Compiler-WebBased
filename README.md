@@ -45,20 +45,9 @@ A source that declares `OPT MODULE` produces a **binary `.m` interface
 module** instead of an executable (and yes, the original Amiga compiler
 can import the result).
 
-## Quick start: the browser IDE
-
-```sh
-python3 -m http.server 8124        # from the repo root
-# open http://127.0.0.1:8124/web/ide.html
-```
-
-Pick something from the **examples dropdown**, hit **Compile & Boot on
-Amiga**, and ~15 seconds later Kickstart 3.1 boots a floppy that was built
-in your browser and runs your program on the Amiga screen. Compiles take
-a few milliseconds; subsequent runs swap the disk and reset.
-
-The IDE has **file tabs**: `main.e` plus any modules you add with
-**+ file**. Files persist in your browser between sessions.
+> **Note:** this repository is the **compiler only** (CLI + embeddable
+> JS library). A browser IDE that runs the output on an emulated Amiga
+> consumes this as a package and is published separately.
 
 ## Using ecomp in your own projects
 
@@ -86,7 +75,7 @@ node ~/tools/ecomp/tools/ecc.js --source=game.e --out=game --adf=game.adf
 `game` is a ready AmigaOS executable; `game.adf` is a bootable floppy that
 runs it. Your `MODULE '*mymodule'` files resolve from your project
 directory; OS modules (`'dos/dos'`, `'intuition/intuition'`, …) come from
-ecomp's bundled `web/modules/` automatically.
+ecomp's bundled `modules/` automatically.
 
 **Use it as a JavaScript library** (node or browser, pure ES modules):
 
@@ -102,14 +91,14 @@ const { bin } = compileProgram(program, sem);   // Uint8Array: AmigaOS hunk exe
 const adf = bootableAdf(bin);                   // Uint8Array: bootable floppy
 ```
 
-The minimal file set for compiling is `src/` + `tools/` + `web/modules/`.
+The minimal file set for compiling is `src/` + `tools/` + `modules/`.
 Everything else (the IDE, tests, emulator wiring) is optional.
 
 | You want to… | You need |
 |---|---|
 | compile E → Amiga executables/ADFs | just these files + node ≥16 |
 | run the output | any Amiga emulator (or real hardware) |
-| the full in-browser experience | your own Kickstart 3.1 ROM + WB 3.1 ADF, uploaded once in the IDE |
+| watch it run in a browser | the separately published IDE package |
 
 ## Multi-file projects
 
@@ -137,11 +126,10 @@ node tools/ecc.js --source=main.e    # helper resolves automatically
 
 Resolution order for `MODULE 'name'` / `MODULE '*name'`:
 
-1. **IDE**: a `name.e` file tab, compiled into your program
-2. **CLI**: a sibling `name.m` binary interface module
-3. **CLI**: a sibling `name.e` source, compiled into your program
-4. `--moduledir=DIR` directories (binary `.m`)
-5. the bundled v40 OS module set (`web/modules/` — `'dos/dos'`,
+1. a sibling `name.m` binary interface module
+2. a sibling `name.e` source, compiled into your program
+3. `--moduledir=DIR` directories (binary `.m`)
+4. the bundled v40 OS module set (`modules/` — `'dos/dos'`,
    `'intuition/intuition'`, `'exec/lists'`, …)
 
 The exec/dos/intuition/graphics library calls are preloaded implicitly,
@@ -181,13 +169,10 @@ round-trips, multi-file builds, bootable ADF images, flag handling, and
 error diagnostics. Both suites run in CI (`.github/workflows/ci.yml`) on
 node 16/20/22 — with zero dependencies there is no install step.
 
-Dev-only (needs the local research corpus, not in git):
-
-- `tools/diff-test.js` — the differential oracle: 115 programs compiled by
-  ecomp **and** by the original `ec` v3.3a (running under vamos m68k
-  emulation), stdout compared byte-for-byte
-- `tools/lex-corpus.js` / `parse-corpus.js` / `codegen-corpus.js` —
-  sweeps over 7,000+ real-world E sources harvested from Aminet
+A third layer runs in CI as well: the **behavioral suite** compiles
+fixture programs and executes the resulting Amiga binaries under vamos
+(open-source m68k emulation), comparing stdout against golden outputs
+that were verified byte-identical against the original 1997 compiler.
 
 ## How it works
 
@@ -199,31 +184,15 @@ src/codegen.js   M68K code generation + hand-assembled E runtime
 src/asm68k.js    instruction encoder      src/asmtext.js  inline-asm assembler
 src/emod.js      binary .m module reader  src/emodwrite.js  .m writer
 src/hunk.js      AmigaOS executable       src/adf.js      bootable OFS floppy
-web/ide.html     the browser IDE (tabs, examples, SAE wiring)
 ```
 
 Pure ES modules throughout; a unit test fails the build if anything under
 `src/` touches a node API, which is what lets the identical code run
 in the browser.
 
-## Provisioning (not in git)
-
-| Path | What | Source |
-|---|---|---|
-| `web/roms/kick31-a1200-40.68.rom` | Kickstart 3.1 (A1200) | your own ROM dump |
-| `web/disks/workbench31-boot.adf` | Workbench 3.1 boot floppy | your own disks |
-| `web/vendor/sae/` | SAE emulator engine | github.com/naTmeg/ScriptedAmigaEmulator |
-| `research/` | Aminet corpus + reference compilers (dev only) | Aminet `dev/e` |
-
-If the ROM/ADF are missing, the IDE shows an upload panel and stores your
-files locally in the browser (Cache API) — nothing is uploaded anywhere.
-`web/modules/` (the E v40 modules from
-[Aminet dev/e/amigae33a](https://aminet.net/package/dev/e/amigae33a)) **is**
-included, with Wouter van Oortmerssen's kind permission.
-
 ## License
 
-GPL-3.0 (see `LICENSE`). **Exception:** `web/modules/` — the E v40 binary
+GPL-3.0 (see `LICENSE`). **Exception:** `modules/` — the E v40 binary
 modules — are copyright **Wouter van Oortmerssen**, included with his
 explicitly granted permission, and are *not* relicensed by this project
 (see `NOTICE`).

@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 // tracked web/modules (CI / fresh clones — Wouter's v40 set)
 const roots = [
   join(here, '..', 'research/extracted/amigae33a/E_v3.3a/Modules.lha.x/Modules'),
-  join(here, '..', 'web/modules'),
+  join(here, '..', 'modules'),
 ];
 
 const cache = new Map();

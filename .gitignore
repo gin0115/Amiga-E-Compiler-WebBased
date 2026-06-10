@@ -3,15 +3,10 @@
 # the harvested Aminet corpus, compiler distributions, extracted archives (486MB)
 research/
 
-# Commodore Kickstart ROMs and Workbench disk images
-web/roms/
-web/disks/
-
-# web/modules/ (the E v40 binary modules from Aminet dev/e/amigae33a) ARE
-# tracked: Wouter van Oortmerssen has kindly granted permission to use them.
-
-# vendored SAE emulator engine (separate project, vendor it at build time)
-web/vendor/
+# the browser IDE lives locally / in a separate package — this repo is the
+# compiler only. (modules/ at the root IS tracked: the E v40 binary modules,
+# included with Wouter van Oortmerssen's kind permission.)
+web/
 
 # --- local machine noise ---
 .claude/
