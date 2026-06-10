@@ -7,9 +7,15 @@
     "test": "node test/run.js",
     "lex-corpus": "node tools/lex-corpus.js",
     "test:e2e": "node test/e2e/run-e2e.js",
-    "test:all": "node test/run.js && node test/e2e/run-e2e.js"
+    "test:all": "node test/run.js && node test/e2e/run-e2e.js && node test/e2e/run-behavior.js",
+    "test:behavior": "node test/e2e/run-behavior.js"
   },
   "engines": {
     "node": ">=16"
+  },
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gin0115/Amiga-E-Compiler-WebBased.git"
   }
 }

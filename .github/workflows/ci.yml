@@ -25,3 +25,9 @@ jobs:
 
       - name: End-to-end tests (CLI → AmigaOS executables / .m modules)
         run: node test/e2e/run-e2e.js
+
+      - name: Install vamos (open-source m68k emulation, no ROM needed)
+        run: pipx install amitools || pip install amitools
+
+      - name: Behavioral tests (run compiled Amiga binaries, golden stdout)
+        run: node test/e2e/run-behavior.js

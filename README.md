@@ -1,5 +1,8 @@
 # ecomp — the Amiga E compiler for the browser
 
+![CI](https://github.com/gin0115/Amiga-E-Compiler-WebBased/actions/workflows/ci.yml/badge.svg)
+![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)
+
 > The Amiga E language and its v40 module set are the work of
 > **Wouter van Oortmerssen**, who has kindly granted permission to use the
 > E libraries in this project. Thank you, Wouter! Every binary this
@@ -68,7 +71,7 @@ executable you can take to any real Amiga or emulator you like.
 **Get it** (any of):
 
 ```sh
-git clone https://github.com/gin0115/Amiga-E-Compiler-WebBased-.git ecomp
+git clone https://github.com/gin0115/Amiga-E-Compiler-WebBased.git ecomp
 # or download a release / the ZIP from GitHub and unpack it anywhere
 ```
 
@@ -217,6 +220,13 @@ files locally in the browser (Cache API) — nothing is uploaded anywhere.
 `web/modules/` (the E v40 modules from
 [Aminet dev/e/amigae33a](https://aminet.net/package/dev/e/amigae33a)) **is**
 included, with Wouter van Oortmerssen's kind permission.
+
+## License
+
+GPL-3.0 (see `LICENSE`). **Exception:** `web/modules/` — the E v40 binary
+modules — are copyright **Wouter van Oortmerssen**, included with his
+explicitly granted permission, and are *not* relicensed by this project
+(see `NOTICE`).
 
 ## Faithfulness notes (oracle-verified against real ec)
 

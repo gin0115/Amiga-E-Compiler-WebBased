@@ -1,0 +1,23 @@
+ecomp — Amiga E compiler in JavaScript
+Copyright (C) 2026 Glynn Quelch
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your
+option) any later version. See LICENSE for the full text.
+
+THIRD-PARTY MATERIAL — NOT COVERED BY THE GPL:
+
+  web/modules/  —  The Amiga E v40 binary module set, copyright
+                   Wouter van Oortmerssen, from his Amiga E v3.3a
+                   distribution (https://aminet.net/package/dev/e/amigae33a).
+                   Included and redistributed here with his kind,
+                   explicitly granted permission. These files remain under
+                   his copyright and are NOT relicensed by this project.
+                   Thank you, Wouter — for the permission and for the
+                   language itself.
+
+The Amiga E language was created by Wouter van Oortmerssen. This project
+is an independent reimplementation and is not affiliated with him,
+Amiga Inc., or Cloanto. Kickstart ROMs and Workbench disks are NOT
+included; users must provide their own legally obtained copies.
