@@ -124,6 +124,22 @@ export class Codegen {
     a.movel_a_push(A0);                // command line ptr (for `arg`)
     a.movem_push(0x3f3e);              // save d2-d7/a2-a6 for the shell
     a.movel_absw_a(4, A6);             // execbase
+    // Workbench launch protocol (like real E): a process with pr_CLI = NIL
+    // was started from WB and MUST collect its startup message — and reply
+    // it at exit — or the machine crashes when it terminates.
+    a.moveq(0, D7);                    // wbmessage (0 = CLI start)
+    a.moveq(0, D0);
+    a.movel_da(D0, A1);
+    a.jsr_disp(-294, A6);              // FindTask(NIL)
+    a.movel_da(D0, A2);
+    a.tstl_disp(172, A2);              // pr_CLI
+    a.bne('__from_cli');
+    a.lea_disp(92, A2, A0);            // pr_MsgPort
+    a.jsr_disp(-384, A6);              // WaitPort
+    a.lea_disp(92, A2, A0);
+    a.jsr_disp(-372, A6);              // GetMsg
+    a.movel_dd(D0, D7);
+    a.label('__from_cli');
     a.lea_pc('__dosname', A1);
     a.moveq(0, D0);
     a.jsr_disp(-552, A6);              // OpenLibrary('dos.library', 0)
@@ -135,6 +151,13 @@ export class Codegen {
     if (this.globalSlots.has('dosbase')) a.movel_d_disp(D0, this.globalSlots.get('dosbase'), A4);
     a.movel_disp_d(44, A7, D0);        // command line ptr (pushed at entry)
     a.movel_d_disp(D0, this.globalSlot('arg'), A4);
+    a.movel_d_disp(D7, this.globalSlot('wbmessage'), A4);
+    a.tstl(D7);
+    a.beq('__arg_cli');
+    a.lea_pc('__emptystr', A0);        // WB start: no command line
+    a.movel_ad(A0, D0);
+    a.movel_d_disp(D0, this.globalSlot('arg'), A4);
+    a.label('__arg_cli');
     a.movel_disp_a(4, A4, A6);
     a.jsr_disp(-60, A6);               // Output()
     a.movel_d_disp(D0, 0, A4);         // stdout
@@ -193,15 +216,23 @@ export class Codegen {
     a.movel_disp_a(4, A4, A1);         // dosbase -> a1... via address reg
     a.movel_absw_a(4, A6);
     a.jsr_disp(-414, A6);              // CloseLibrary
+    a.movel_disp_d(this.globalSlot('wbmessage'), A4, D2);
+    a.label('__quit2');                // d2 = wbmessage (or 0)
+    a.tstl(D2);
+    a.beq('__noreply');
+    a.movel_absw_a(4, A6);
+    a.jsr_disp(-132, A6);              // Forbid() — WB must not unload us early
+    a.movel_da(D2, A1);
+    a.movel_absw_a(4, A6);
+    a.jsr_disp(-378, A6);              // ReplyMsg(wbmessage)
+    a.label('__noreply');
     a.movel_disp_d(16, A4, D0);        // exit code (set by CleanUp, else 0)
     a.movem_pop(0x7cfc);
     a.addql_a(4, A7);                  // drop saved command line ptr
     a.rts();
-    a.label('__quit');
-    a.movem_pop(0x7cfc);
-    a.addql_a(4, A7);
-    a.moveq(0, D0);
-    a.rts();
+    a.label('__quit');                 // dos.library failed to open
+    a.movel_dd(D7, D2);
+    a.bra('__quit2');
   }
 
   emitRuntime() {
@@ -315,8 +346,10 @@ export class Codegen {
     a.subl_ad(A0, D3);                 // len
     a.movel_ad(A0, D2);                // buf
     a.movel_disp_d(0, A4, D1);         // stdout
+    a.beq('__wf_nout');                // WB start: no console — drop output
     a.movel_disp_a(4, A4, A6);         // dosbase
     a.jsr_disp(-48, A6);               // Write
+    a.label('__wf_nout');
     a.unlk(A5);
     a.movem_pop(0x0c0c);
     a.rts();
@@ -1115,6 +1148,9 @@ export class Codegen {
     a.label('__credit');
     a.asciiz('Built with ecomp. E modules (c) Wouter van Oortmerssen, used with permission - thanks Wouter!');
     a.align();
+    a.label('__emptystr');
+    a.w8(0);
+    a.w8(0);
     a.label('__dosname');
     a.asciiz('dos.library');
     for (const [value, label] of this.strings) {
