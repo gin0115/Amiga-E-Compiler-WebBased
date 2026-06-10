@@ -17,8 +17,11 @@ function check(name, fn) {
   catch (e) { fail++; console.log(`FAIL ${name}\n     ${e.message}`); }
 }
 function run(args, opts = {}) {
+  // capture stderr too: expected-failure fixtures print diagnostics, which
+  // must not leak into the CI log as if they were our own errors
   try {
-    const out = execFileSync('node', [ECC, ...args], { encoding: 'utf8', ...opts });
+    const out = execFileSync('node', [ECC, ...args],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts });
     return { status: 0, out };
   } catch (e) {
     return { status: e.status, out: (e.stdout ?? '') + (e.stderr ?? '') };
