@@ -1,0 +1,2 @@
+OPT MODULE
+EXPORT PROC triple(n) IS n*3

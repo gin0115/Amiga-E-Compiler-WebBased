@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Amiga E Research Rig — Kickstart 3.1 / Workbench 3.1</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; background: #0a0a14; color: #c7c7d9;
+      font-family: ui-monospace, "Cascadia Code", Menlo, monospace;
+      display: flex; flex-direction: column; align-items: center; gap: 12px;
+      padding: 16px;
+    }
+    h1 { font-size: 15px; font-weight: 600; margin: 4px 0; color: #e8e8f4; }
+    .stage {
+      width: 720px; height: 568px; background: #000;
+      border: 2px solid #3a3a5a; box-shadow: 0 0 24px #000a;
+    }
+    #sae-host { width: 720px; height: 568px; }
+    #sae-host canvas { display: block; width: 720px; height: 568px; image-rendering: pixelated; }
+    .bar { width: 720px; height: 6px; background: #1c1c2e; border-radius: 3px; overflow: hidden; }
+    #progress-bar { height: 100%; width: 0; background: linear-gradient(90deg,#5a7bff,#8a5aff); transition: width .15s; }
+    .status { font-size: 12px; min-height: 16px; }
+    .status.error { color: #ff6b6b; }
+    .controls { display: flex; gap: 10px; align-items: center; font-size: 12px; }
+    label.mount { cursor: pointer; padding: 4px 10px; border: 1px solid #3a3a5a; border-radius: 4px; background: #16162a; }
+    label.mount:hover { background: #20203a; }
+    input[type=file] { display: none; }
+    .hint { font-size: 11px; color: #6a6a88; max-width: 720px; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>Amiga E Research Rig — Kickstart 3.1 (40.68, A1200) + Workbench 3.1</h1>
+  <div class="stage"><div id="sae-host"></div></div>
+  <div class="bar"><div id="progress-bar"></div></div>
+  <div id="status" class="status">Booting…</div>
+  <div class="controls">
+    <label class="mount">Mount ADF → DF0:
+      <input type="file" id="adf-input" accept=".adf" />
+    </label>
+    <span class="hint">Click the canvas to give it keyboard/mouse focus.</span>
+  </div>
+  <p class="hint">Self-contained research instance. Engine: vendored SAE. Boots a real
+  Commodore Kickstart 3.1 and Workbench 3.1. Use the mount control (or <code>window.mountADF(slot, buffer, name)</code>
+  from the console) to load Amiga E disk images.</p>
+
+  <script src="./boot.js"></script>
+  <script>
+    document.getElementById('adf-input').addEventListener('change', function (e) {
+      var file = e.target.files && e.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () { window.mountADF(0, reader.result, file.name); };
+      reader.readAsArrayBuffer(file);
+    });
+  </script>
+</body>
+</html>

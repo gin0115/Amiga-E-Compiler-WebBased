@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ecomp — Amiga E in the browser</title>
+<style>
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #14151a; color: #d8dae2; display: flex; height: 100vh; }
+  #left { width: 44%; display: flex; flex-direction: column; padding: 12px; box-sizing: border-box; }
+  #right { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 12px; }
+  h1 { font-size: 16px; margin: 0 0 8px; color: #7bd88f; }
+  textarea { flex: 1; background: #0d0e12; color: #e6e6e6; border: 1px solid #333; border-radius: 6px;
+             font: 13px/1.5 "Cascadia Code", monospace; padding: 10px; resize: none; white-space: pre; }
+  button { margin-top: 10px; padding: 10px 18px; font-size: 15px; background: #2f6feb; color: white;
+           border: 0; border-radius: 6px; cursor: pointer; }
+  button:disabled { background: #444; }
+  #log { margin-top: 10px; min-height: 70px; max-height: 160px; overflow: auto; background: #0d0e12;
+         border: 1px solid #333; border-radius: 6px; padding: 8px; font: 12px monospace; white-space: pre-wrap; }
+  .err { color: #ff7b72; }
+  #tabs { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; align-items: center; }
+  .tab { padding: 4px 10px; background: #20222a; border: 1px solid #333; border-radius: 6px 6px 0 0;
+         cursor: pointer; font: 12px monospace; color: #9aa0ae; display: flex; gap: 6px; }
+  .tab.active { background: #0d0e12; color: #7bd88f; border-bottom-color: #0d0e12; }
+  .tab .x { color: #ff7b72; cursor: pointer; }
+  #newname { width: 110px; background: #0d0e12; color: #e6e6e6; border: 1px solid #333;
+             border-radius: 4px; font: 12px monospace; padding: 3px 6px; }
+  #addfile { padding: 3px 10px; font-size: 12px; margin: 0; }
+  #provision { margin-top: 8px; padding: 8px; background: #2a1d12; border: 1px solid #6b4a1f;
+               border-radius: 6px; font-size: 12px; display: none; }
+  #provision label { display: block; margin: 6px 0; color: #e0b97e; }
+  .ok { color: #7bd88f; }
+  #sae-host { background: #000; border: 1px solid #333; border-radius: 6px; }
+  .status { margin: 8px 0; font-size: 12px; color: #9aa0ae; }
+  #progress { width: 720px; height: 4px; background: #222; border-radius: 2px; margin-bottom: 6px; }
+  #progress-bar { height: 100%; width: 0; background: #2f6feb; border-radius: 2px; }
+</style>
+</head>
+<body>
+  <div id="left">
+    <h1>ecomp — compile Amiga E, run it on a real (emulated) Amiga</h1>
+    <div id="tabs"></div>
+    <textarea id="src" spellcheck="false">PROC main()
+  DEF i
+  WriteF('Hello from ecomp, compiled in your browser!\n')
+  FOR i:=1 TO 10
+    WriteF('fib(\d) = \d\n', i, fib(i))
+  ENDFOR
+ENDPROC
+
+PROC fib(n)
+  IF n<2 THEN RETURN n
+ENDPROC fib(n-1)+fib(n-2)</textarea>
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+      <select id="examples" style="background:#0d0e12;color:#e6e6e6;border:1px solid #333;border-radius:6px;padding:8px;font-size:13px">
+        <option value="">— load an example —</option>
+        <option value="fib">Fibonacci (hello world)</option>
+        <option value="gfx">Graphics: lines, boxes, TextF</option>
+        <option value="win">Interactive window (close gadget)</option>
+        <option value="multi">Multi-file project (module tab)</option>
+        <option value="float">Floating point + Fsqrt</option>
+        <option value="lists">Lists, quotes + MapList</option>
+        <option value="oop">Objects, methods + exceptions</option>
+      </select>
+      <button id="go" style="flex:1;margin:0">Compile &amp; Boot on Amiga ▶</button>
+    </div>
+    <div id="log">Ready. Kickstart 3.1 + SAE load on first boot.</div>
+    <div id="provision">
+      <b>Provide your own system files</b> (stored locally in your browser only):
+      <label>Kickstart 3.1 ROM (A1200, 512KB): <input type="file" id="upl-rom"></label>
+      <label>Workbench 3.1 boot ADF: <input type="file" id="upl-wb"></label>
+    </div>
+  </div>
+  <div id="right">
+    <div class="status" id="status">Emulator idle — compile to boot.</div>
+    <div id="progress"><div id="progress-bar"></div></div>
+    <div id="sae-host"></div>
+  </div>
+<script type="module">
+import { parse } from '../src/parser.js';
+import { analyze } from '../src/sem.js';
+import { compileProgram } from '../src/codegen.js';
+import { bootableAdf } from '../src/adf.js';
+import { readEmod } from '../src/emod.js';
+
+// ---- system-image provisioning (task: public hosting without bundled
+// copyrighted images). Uploaded files persist in the Cache API and a fetch
+// wrapper serves them to boot.js transparently.
+const IMG_ROM = './roms/kick31-a1200-40.68.rom';
+const IMG_WB = './disks/workbench31-boot.adf';
+const realFetch = window.fetch.bind(window);
+window.fetch = async (url, opts) => {
+  if (typeof url === 'string' && (url.includes('/roms/') || url.includes('/disks/'))) {
+    try {
+      const c = await caches.open('ecomp-images');
+      const hit = await c.match(url);
+      if (hit) return hit;
+    } catch { /* cache unavailable */ }
+  }
+  return realFetch(url, opts);
+};
+async function checkProvision() {
+  const need = [];
+  for (const [url, inputId] of [[IMG_ROM, 'upl-rom'], [IMG_WB, 'upl-wb']]) {
+    let ok = false;
+    try {
+      const c = await caches.open('ecomp-images');
+      ok = !!(await c.match(url));
+    } catch { /* no cache */ }
+    if (!ok) {
+      try { ok = (await realFetch(url, { method: 'HEAD' })).ok; } catch { /* missing */ }
+    }
+    if (!ok) need.push([url, inputId]);
+  }
+  if (!need.length) return;
+  document.getElementById('provision').style.display = 'block';
+  for (const [url, inputId] of need) {
+    document.getElementById(inputId).addEventListener('change', async ev => {
+      const f = ev.target.files[0];
+      if (!f) return;
+      const c = await caches.open('ecomp-images');
+      await c.put(url, new Response(await f.arrayBuffer()));
+      log(`stored ${f.name} (${f.size} bytes) for ${url}`, 'ok');
+    });
+  }
+}
+checkProvision();
+
+const moduleCache = new Map();
+async function fetchModule(name) {
+  const key = name.toLowerCase();
+  if (moduleCache.has(key)) return moduleCache.get(key);
+  let mod = null;
+  try {
+    const res = await fetch(`./modules/${key}.m`);
+    if (res.ok) mod = readEmod(new Uint8Array(await res.arrayBuffer()), name);
+  } catch { /* missing module */ }
+  moduleCache.set(key, mod);
+  return mod;
+}
+
+const logEl = document.getElementById('log');
+const srcEl = document.getElementById('src');
+const goEl = document.getElementById('go');
+const tabsEl = document.getElementById('tabs');
+
+// ---- multi-file project state (main.e + any modules) ----
+let files = {};
+let active = 'main.e';
+try { files = JSON.parse(localStorage.getItem('ecomp-files')) || {}; } catch { files = {}; }
+if (!files['main.e']) {
+  files['main.e'] = localStorage.getItem('ecomp-src') || srcEl.value;
+}
+function saveFiles() {
+  files[active] = srcEl.value;
+  localStorage.setItem('ecomp-files', JSON.stringify(files));
+}
+function renderTabs() {
+  tabsEl.textContent = '';
+  for (const name of Object.keys(files)) {
+    const tab = document.createElement('div');
+    tab.className = 'tab' + (name === active ? ' active' : '');
+    const label = document.createElement('span');
+    label.textContent = name;
+    tab.appendChild(label);
+    if (name !== 'main.e') {
+      const x = document.createElement('span');
+      x.className = 'x';
+      x.textContent = '\u00d7';
+      x.onclick = ev => {
+        ev.stopPropagation();
+        delete files[name];
+        if (active === name) active = 'main.e';
+        srcEl.value = files[active];
+        saveFiles();
+        renderTabs();
+      };
+      tab.appendChild(x);
+    }
+    tab.onclick = () => {
+      saveFiles();
+      active = name;
+      srcEl.value = files[name];
+      renderTabs();
+    };
+    tabsEl.appendChild(tab);
+  }
+  const inp = document.createElement('input');
+  inp.id = 'newname';
+  inp.placeholder = 'helper.e';
+  const add = document.createElement('button');
+  add.id = 'addfile';
+  add.textContent = '+ file';
+  add.onclick = () => {
+    let name = inp.value.trim();
+    if (!name) return;
+    if (!/\.e$/i.test(name)) name += '.e';
+    if (!files[name]) {
+      files[name] = "OPT MODULE\nEXPORT PROC hello()\n  WriteF('hello from " + name + "!\\n')\nENDPROC\n";
+    }
+    saveFiles();
+    active = name;
+    srcEl.value = files[name];
+    renderTabs();
+  };
+  tabsEl.appendChild(inp);
+  tabsEl.appendChild(add);
+}
+srcEl.value = files[active];
+renderTabs();
+
+const EXAMPLES = {
+  fib: { 'main.e': "PROC main()\n  DEF i\n  WriteF('Hello from ecomp!\\n')\n  FOR i:=1 TO 10\n    WriteF('fib(\\d) = \\d\\n', i, fib(i))\n  ENDFOR\nENDPROC\n\nPROC fib(n)\n  IF n<2 THEN RETURN n\nENDPROC fib(n-1)+fib(n-2)" },
+  gfx: { 'main.e': "PROC main()\n  DEF w, i\n  w := OpenW(20, 20, 600, 200, $200, $100F, 'ecomp graphics', NIL, 1, NIL)\n  IF w\n    FOR i := 0 TO 17 DO Line(30, 170, 30+(i*30), 40, Mod(i,3)+1)\n    Box(470, 150, 570, 180, 3)\n    TextF(250, 30, 'TextF says: \\d!', 2026)\n    Delay(50*15)\n    CloseW(w)\n  ENDIF\nENDPROC" },
+  win: { 'main.e': "PROC main()\n  DEF w, class\n  w := OpenW(50, 40, 400, 120, $200, $100F, 'click my close gadget', NIL, 1, NIL)\n  IF w\n    WriteF('waiting for the close gadget...\\n')\n    REPEAT\n      class := WaitIMessage(w)\n    UNTIL class = $200\n    CloseW(w)\n    WriteF('closed by you!\\n')\n  ENDIF\nENDPROC" },
+  multi: {
+    'main.e': "MODULE '*helper'\nPROC main()\n  WriteF('main.e calling its module:\\n')\n  greet('Amiga')\n  greet('browser')\n  WriteF('sum = \\d\\n', add(40, 2))\nENDPROC",
+    'helper.e': "OPT MODULE\nEXPORT PROC greet(who)\n  WriteF('hello, \\s!\\n', who)\nENDPROC\nEXPORT PROC add(a, b) IS a+b",
+  },
+  float: { 'main.e': "PROC main()\n  DEF x, y, a\n  x := 2.0\n  y := !x*3.5\n  a := !y!\n  WriteF('y bits=\\d as int=\\d\\n', y, a)\n  WriteF('Fsqrt(2.25) as int = \\d\\n', !Fsqrt(2.25)!)\nENDPROC" },
+  lists: { 'main.e': "DEF v\nPROC main()\n  DEF src:PTR TO LONG, dst[10]:LIST, f\n  src := [1,2,3,4,5]\n  MapList({v}, src, dst, `v*v)\n  FOR v := 0 TO 4 DO WriteF('\\d ', dst[v])\n  WriteF('\\n')\n  f := `v*10\n  v := 7\n  WriteF('Eval = \\d\\n', Eval(f))\nENDPROC" },
+  oop: { 'main.e': "OBJECT account\n  balance:LONG\nENDOBJECT\nPROC withdraw(n) OF account\n  IF n > self.balance THEN Raise(\"BANK\")\n  self.balance := self.balance - n\nENDPROC self.balance\nPROC main() HANDLE\n  DEF a:PTR TO account\n  NEW a\n  a.balance := 100\n  WriteF('after 30: \\d\\n', a.withdraw(30))\n  WriteF('after 200: \\d\\n', a.withdraw(200))\nEXCEPT\n  WriteF('exception! insufficient funds\\n')\nENDPROC" },
+};
+document.getElementById('examples').addEventListener('change', ev => {
+  const ex = EXAMPLES[ev.target.value];
+  if (!ex) return;
+  saveFiles();
+  for (const [name, content] of Object.entries(ex)) files[name] = content;
+  active = 'main.e';
+  srcEl.value = files[active];
+  saveFiles();
+  renderTabs();
+  log(`loaded example '${ev.target.value}'${Object.keys(ex).length > 1 ? ' (multiple files)' : ''}`, 'ok');
+});
+
+function log(msg, cls) {
+  const div = document.createElement('div');
+  div.textContent = msg;
+  if (cls) div.className = cls;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function editorModule(name) {
+  // MODULE '*helper' / 'helper' → a helper.e tab, parsed as a source module
+  const base = (name.startsWith('*') ? name.slice(1) : name).split('/').pop();
+  for (const cand of [base + '.e', base.toLowerCase() + '.e']) {
+    if (files[cand] !== undefined && cand !== 'main.e') {
+      const r = parse(files[cand], cand);
+      if (r.errors.length) {
+        r.errors.slice(0, 3).forEach(e => log(`${cand}:${e.line}:${e.col} ${e.msg}`, 'err'));
+        return null;
+      }
+      return { name, sourceProgram: r.program, consts: new Map(), objects: new Map(), lib: null };
+    }
+  }
+  return undefined;   // not an editor file — try binary modules
+}
+
+async function compile(src) {
+  const { program, errors: pe } = parse(src, 'main.e');
+  if (pe.length) { pe.slice(0, 5).forEach(e => log(`main.e ${e.line}:${e.col} ${e.msg}`, 'err')); return null; }
+  // prefetch the binary modules the program imports (plus E's implicit
+  // exec/dos/intuition/graphics preloads), then resolve them sync
+  const wanted = ['exec', 'dos', 'intuition', 'graphics',
+    ...program.decls.filter(d => d.kind === 'Module').flatMap(d => d.names)];
+  for (const name of wanted) {
+    if (editorModule(name) === undefined) await fetchModule(name);
+  }
+  const sem = analyze(program, {
+    resolveModule: n => {
+      const ed = editorModule(n);
+      if (ed !== undefined) return ed;
+      return moduleCache.get(n.toLowerCase()) ?? null;
+    },
+  });
+  if (sem.errors.length) { sem.errors.slice(0, 5).forEach(e => log(`sem: ${e.msg}`, 'err')); return null; }
+  const { bin, errors } = compileProgram(program, sem);
+  if (errors.length) { errors.slice(0, 5).forEach(e => log(`codegen: ${e.msg}`, 'err')); return null; }
+  return bin;
+}
+
+goEl.addEventListener('click', async () => {
+  logEl.textContent = '';
+  saveFiles();
+  const t0 = performance.now();
+  const bin = await compile(files['main.e']);
+  if (!bin) return;
+  const adf = bootableAdf(bin, { volume: 'ECOMP', command: 'prog' });
+  const ms = (performance.now() - t0).toFixed(1);
+  log(`compiled: ${bin.length}-byte AmigaOS executable on a bootable 880K floppy (${ms}ms)`, 'ok');
+  log('E modules \u00a9 Wouter van Oortmerssen \u2014 used with his kind permission. Thanks, Wouter!', 'ok');
+  const url = URL.createObjectURL(new Blob([adf], { type: 'application/octet-stream' }));
+  if (window.__booted) {
+    // warm path: swap the disk and reset
+    window.mountADF(0, adf.buffer, 'ecomp.adf');
+    if (window.sae && window.sae.reset) window.sae.reset(true);
+    log('disk swapped, Amiga reset — watch the screen', 'ok');
+    return;
+  }
+  window.__booted = true;
+  history.replaceState(null, '', '?df0=' + encodeURIComponent(url));
+  const tag = document.createElement('script');
+  tag.src = './boot.js';
+  document.head.appendChild(tag);
+  log('booting Kickstart 3.1 — the boot shell will run your program (~15s)', 'ok');
+});
+</script>
+</body>
+</html>

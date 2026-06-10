@@ -1,0 +1,19 @@
+# --- third-party / copyrighted material we do not own: never push ---
+
+# the harvested Aminet corpus, compiler distributions, extracted archives (486MB)
+research/
+
+# Commodore Kickstart ROMs and Workbench disk images
+web/roms/
+web/disks/
+
+# web/modules/ (the E v40 binary modules from Aminet dev/e/amigae33a) ARE
+# tracked: Wouter van Oortmerssen has kindly granted permission to use them.
+
+# vendored SAE emulator engine (separate project, vendor it at build time)
+web/vendor/
+
+# --- local machine noise ---
+.claude/
+node_modules/
+*.log

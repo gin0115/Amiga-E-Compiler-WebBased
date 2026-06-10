@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [16, 20, 22]
+    name: node ${{ matrix.node }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # zero dependencies — no npm install step at all
+
+      - name: Unit tests (lexer, parser, sem, assembler, encodings)
+        run: node test/run.js
+
+      - name: End-to-end tests (CLI → AmigaOS executables / .m modules)
+        run: node test/e2e/run-e2e.js
