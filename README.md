@@ -57,6 +57,57 @@ a few milliseconds; subsequent runs swap the disk and reset.
 The IDE has **file tabs**: `main.e` plus any modules you add with
 **+ file**. Files persist in your browser between sessions.
 
+## Using ecomp in your own projects
+
+ecomp is fully self-contained: **no Kickstart ROM, no Workbench disk, no
+emulator and no npm packages are needed to compile.** Those images are
+only used by the browser IDE to *run* your program on the embedded
+emulated Amiga afterwards. The compiler output is a standard AmigaOS
+executable you can take to any real Amiga or emulator you like.
+
+**Get it** (any of):
+
+```sh
+git clone https://github.com/gin0115/Amiga-E-Compiler-WebBased-.git ecomp
+# or download a release / the ZIP from GitHub and unpack it anywhere
+```
+
+**Compile from your own project directory** — call the CLI by its path,
+nothing needs installing:
+
+```sh
+cd ~/my-amiga-game
+node ~/tools/ecomp/tools/ecc.js --source=game.e --out=game --adf=game.adf
+```
+
+`game` is a ready AmigaOS executable; `game.adf` is a bootable floppy that
+runs it. Your `MODULE '*mymodule'` files resolve from your project
+directory; OS modules (`'dos/dos'`, `'intuition/intuition'`, …) come from
+ecomp's bundled `web/modules/` automatically.
+
+**Use it as a JavaScript library** (node or browser, pure ES modules):
+
+```js
+import { parse }          from './ecomp/src/parser.js';
+import { analyze }        from './ecomp/src/sem.js';
+import { compileProgram } from './ecomp/src/codegen.js';
+import { bootableAdf }    from './ecomp/src/adf.js';
+
+const { program, errors } = parse(eSourceText, 'game.e');
+const sem = analyze(program /*, { resolveModule } for MODULE imports */);
+const { bin } = compileProgram(program, sem);   // Uint8Array: AmigaOS hunk exe
+const adf = bootableAdf(bin);                   // Uint8Array: bootable floppy
+```
+
+The minimal file set for compiling is `src/` + `tools/` + `web/modules/`.
+Everything else (the IDE, tests, emulator wiring) is optional.
+
+| You want to… | You need |
+|---|---|
+| compile E → Amiga executables/ADFs | just these files + node ≥16 |
+| run the output | any Amiga emulator (or real hardware) |
+| the full in-browser experience | your own Kickstart 3.1 ROM + WB 3.1 ADF, uploaded once in the IDE |
+
 ## Multi-file projects
 
 ecomp follows real E's model — you always compile **one main source**, and
