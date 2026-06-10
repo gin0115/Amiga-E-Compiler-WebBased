@@ -12,9 +12,9 @@
 
 A from-scratch compiler for the **Amiga E** programming language
 (E v3.3a, 1997), written in zero-dependency JavaScript. It compiles E
-source to genuine AmigaOS M68K hunk executables — in node via a CLI, or
-entirely **inside your browser**, where the bundled SAE emulator boots a
-real Kickstart 3.1 and runs your program on an emulated A1200.
+source to genuine AmigaOS M68K hunk executables and bootable ADF floppy
+images — usable as a node CLI or embedded as a pure ES-module library
+(it runs in the browser too).
 
 Faithfulness is the core value: behaviour is validated against the
 **original 1997 compiler** by a differential test suite (115 programs,

@@ -28,8 +28,13 @@ jobs:
 
       - name: Install vamos (open-source m68k emulation, no ROM needed)
         run: |
-          pipx install amitools || pip install --user amitools
-          which vamos || ls /opt/pipx_bin ~/.local/bin 2>/dev/null || true
+          pipx install amitools
+          pipx inject amitools 'machine68k==0.3.0'  # CPU core, pinned: 0.4+ broke amitools 0.8.1
+          BIN_DIR="$(pipx environment --value PIPX_BIN_DIR)"
+          echo "pipx bin dir: $BIN_DIR"
+          "$BIN_DIR/vamos" --help > /dev/null   # fail THIS step if not runnable
+          echo "$BIN_DIR" >> "$GITHUB_PATH"
+          echo "VAMOS_BIN=$BIN_DIR/vamos" >> "$GITHUB_ENV"
 
       - name: Behavioral tests (run compiled Amiga binaries, golden stdout)
         env:

@@ -16,13 +16,14 @@ const FAKE = '*.library=mode:fake,version:40+dos.library=mode:auto+exec.library=
   + '+mathieeesingbas.library=mode:auto+mathieeesingtrans.library=mode:auto';
 
 const candidates = [
+  process.env.VAMOS_BIN,
   'vamos',
   `${process.env.HOME}/.local/bin/vamos`,
   '/opt/pipx_bin/vamos',
   `${process.env.HOME}/.local/pipx/venvs/amitools/bin/vamos`,
 ];
 let vamos = null;
-for (const c of candidates) {
+for (const c of candidates.filter(Boolean)) {
   try { execSync(`"${c}" --help`, { stdio: 'ignore' }); vamos = c; break; }
   catch { /* next */ }
 }
