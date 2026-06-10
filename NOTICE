@@ -9,8 +9,9 @@ option) any later version. See LICENSE for the full text.
 THIRD-PARTY MATERIAL — NOT COVERED BY THE GPL:
 
   modules/  —  The Amiga E v40 binary module set, copyright
-                   Wouter van Oortmerssen, from his Amiga E v3.3a
-                   distribution (https://aminet.net/package/dev/e/amigae33a).
+                   Wouter van Oortmerssen (https://strlen.com/), from his
+                   Amiga E v3.3a distribution
+                   (https://aminet.net/package/dev/e/amigae33a).
                    Included and redistributed here with his kind,
                    explicitly granted permission. These files remain under
                    his copyright and are NOT relicensed by this project.

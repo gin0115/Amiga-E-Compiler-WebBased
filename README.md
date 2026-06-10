@@ -4,9 +4,11 @@
 ![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)
 
 > The Amiga E language and its v40 module set are the work of
-> **Wouter van Oortmerssen**, who has kindly granted permission to use the
-> E libraries in this project. Thank you, Wouter! Every binary this
-> compiler produces carries that credit embedded in it.
+> **[Wouter van Oortmerssen](https://strlen.com/)**, who has kindly granted
+> permission to use the E libraries in this project
+> (from [Aminet dev/e/amigae33a](https://aminet.net/package/dev/e/amigae33a)).
+> Thank you, Wouter! Every binary this compiler produces carries that
+> credit embedded in it.
 
 A from-scratch compiler for the **Amiga E** programming language
 (E v3.3a, 1997), written in zero-dependency JavaScript. It compiles E
