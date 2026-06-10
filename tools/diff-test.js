@@ -13,6 +13,7 @@ import { resolveModule, makeResolver } from './modules.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = join(root, 'research/extracted/amigae33a/E_v3.3a/Bin');
+const FULL_EC = join(root, 'research/strlen/ec33a/ec33a');
 const MODS = join(root, 'research/extracted/amigae33a/E_v3.3a/Modules.lha.x/Modules');
 const VAMOS = join(process.env.HOME, '.local/bin/vamos');
 const FAKE = '*.library=mode:fake,version:40+dos.library=mode:auto+exec.library=mode:auto+mathieeesingbas.library=mode:auto+mathieeesingtrans.library=mode:auto';
@@ -28,12 +29,12 @@ function vamos(args, timeoutMs = 60000) {
 function runOracle(work, src, aux) {
   if (aux) {
     writeFileSync(join(work, aux.file), aux.src, 'latin1');
-    vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${BIN}`,
-      '-a', 'emodules:mods:', '--cwd', 'work:', 'bin:ECDEMO', aux.file]);
+    vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${BIN}`, '-V', `fullec:${FULL_EC}`,
+      '-a', 'emodules:mods:', '--cwd', 'work:', 'fullec:ec', aux.file]);
   }
   writeFileSync(join(work, 'ref.e'), src, 'latin1');
-  vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${BIN}`,
-    '-a', 'emodules:mods:', '--cwd', 'work:', 'bin:ECDEMO', 'ref.e']);
+  vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${BIN}`, '-V', `fullec:${FULL_EC}`,
+    '-a', 'emodules:mods:', '--cwd', 'work:', 'fullec:ec', 'ref.e']);
   if (!existsSync(join(work, 'ref'))) return { ok: false, out: '<oracle compile failed>' };
   const r = vamos(['-q', '-O', FAKE, '-V', `work:${work}`, '--cwd', 'work:', 'work:ref']);
   return { ok: true, out: r.out };

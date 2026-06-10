@@ -15,15 +15,27 @@ const BEH = join(here, 'behavior');
 const FAKE = '*.library=mode:fake,version:40+dos.library=mode:auto+exec.library=mode:auto'
   + '+mathieeesingbas.library=mode:auto+mathieeesingtrans.library=mode:auto';
 
-let vamos = 'vamos';
-try { execSync(`${vamos} --help`, { stdio: 'ignore' }); }
-catch {
-  try { vamos = `${process.env.HOME}/.local/bin/vamos`; execSync(`${vamos} --help`, { stdio: 'ignore' }); }
-  catch {
-    console.log('SKIPPED: vamos not installed (pip install amitools) — behavioral tests need it');
-    process.exit(0);
-  }
+const candidates = [
+  'vamos',
+  `${process.env.HOME}/.local/bin/vamos`,
+  '/opt/pipx_bin/vamos',
+  `${process.env.HOME}/.local/pipx/venvs/amitools/bin/vamos`,
+];
+let vamos = null;
+for (const c of candidates) {
+  try { execSync(`"${c}" --help`, { stdio: 'ignore' }); vamos = c; break; }
+  catch { /* next */ }
 }
+if (!vamos) {
+  if (process.env.REQUIRE_VAMOS) {
+    console.error('FAIL: vamos not found but REQUIRE_VAMOS is set (CI must run behavioral tests)');
+    console.error('searched:', candidates.join(', '));
+    process.exit(1);
+  }
+  console.log('SKIPPED: vamos not installed (pipx install amitools) — behavioral tests need it');
+  process.exit(0);
+}
+console.log(`using vamos: ${vamos}`);
 
 let pass = 0, fail = 0;
 const work = mkdtempSync(join(tmpdir(), 'ecomp-beh-'));

@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = join(root, 'research/extracted/amigae33a/E_v3.3a/Bin');
+const FULL_EC = join(root, 'research/strlen/ec33a/ec33a');
 const MODS = join(root, 'research/extracted/amigae33a/E_v3.3a/Modules.lha.x/Modules');
 const VAMOS = join(process.env.HOME, '.local/bin/vamos');
 
@@ -26,7 +27,7 @@ function vamos(work, amiCmd, args, { fakeLibs = false, timeoutMs = 60000 } = {})
     ...(fakeLibs ? ['-O', FAKE_LIBS] : []),
     '-V', `work:${work}`,
     '-V', `mods:${MODS}`,
-    '-V', `bin:${BIN}`,
+    '-V', `bin:${BIN}`, '-V', `fullec:${FULL_EC}`,
     '-a', 'emodules:mods:',
     '--cwd', 'work:',
     amiCmd, ...args,
@@ -46,7 +47,7 @@ function vamos(work, amiCmd, args, { fakeLibs = false, timeoutMs = 60000 } = {})
 export function oracleCompile(source, name = 'probe') {
   const work = mkdtempSync(join(tmpdir(), 'ecomp-oracle-'));
   writeFileSync(join(work, `${name}.e`), source, 'latin1');
-  const r = vamos(work, 'bin:ECDEMO', [`${name}.e`]);
+  const r = vamos(work, 'fullec:ec', [`${name}.e`]);
   const exe = join(work, name);
   const ok = existsSync(exe);
   return { ok, out: r.out, exe: ok ? exe : null, work };

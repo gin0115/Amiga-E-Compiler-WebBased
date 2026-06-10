@@ -27,7 +27,11 @@ jobs:
         run: node test/e2e/run-e2e.js
 
       - name: Install vamos (open-source m68k emulation, no ROM needed)
-        run: pipx install amitools || pip install amitools
+        run: |
+          pipx install amitools || pip install --user amitools
+          which vamos || ls /opt/pipx_bin ~/.local/bin 2>/dev/null || true
 
       - name: Behavioral tests (run compiled Amiga binaries, golden stdout)
+        env:
+          REQUIRE_VAMOS: 1
         run: node test/e2e/run-behavior.js
