@@ -7,8 +7,9 @@
     "test": "node test/run.js",
     "lex-corpus": "node tools/lex-corpus.js",
     "test:e2e": "node test/e2e/run-e2e.js",
-    "test:all": "node test/run.js && node test/e2e/run-e2e.js && node test/e2e/run-behavior.js",
-    "test:behavior": "node test/e2e/run-behavior.js"
+    "test:all": "node test/run.js && node test/e2e/run-e2e.js && node test/e2e/run-behavior.js && node test/e2e/run-link.js",
+    "test:behavior": "node test/e2e/run-behavior.js",
+    "test:link": "node test/e2e/run-link.js"
   },
   "engines": {
     "node": ">=16"

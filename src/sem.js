@@ -98,6 +98,19 @@ export class Sem {
             members.set(mn, { offset: m.offset, size: m.val || 0, type: null });
           }
           this.objects.set(k, { name: k, of: null, members, size: obj.size });
+          // A class from a binary module dispatches via a runtime vtable
+          // ("descriptor") built by the module's own code — see
+          // docs/oop-dispatch.md. Record the metadata codegen needs.
+          if (mod.isCodeModule && obj.methods && obj.methods.length) {
+            this.binaryClasses = this.binaryClasses ?? new Map();
+            const methods = new Map();
+            for (const me of obj.methods) methods.set(me.name, { slot: me.slot ?? me.offset, args: me.args, kind: me.kind });
+            this.binaryClasses.set(k, {
+              name: k, module: name, osize: obj.size, delsize: obj.delsize,
+              delcode: obj.delcode, odestr: obj.odestr, methods,
+              ctorSlot: methods.get(k)?.slot ?? null,   // ctor = method named == class
+            });
+          }
         }
         if (mod.lib) {
           this.libBases.set(mod.lib.basename, mod.lib.libname);
@@ -105,6 +118,21 @@ export class Sem {
           for (const f of mod.lib.funcs) {
             if (!f.name) continue;
             this.libfuncs.set(f.name, { offset: f.offset, regs: f.regs, base: mod.lib.basename });
+          }
+        }
+        if (mod.isCodeModule && mod.code) {
+          // binary code module: its compiled PROCs are linked into the output
+          // (codegen appends mod.code and resolves proc_<name> into it).
+          this.binaryModules = this.binaryModules ?? [];
+          this.binaryProcs = this.binaryProcs ?? new Set();
+          this.binaryModules.push({
+            name, code: mod.code, procs: mod.procs, relocs: mod.relocs,
+            globs: mod.globs, globalsCount: mod.globalsCount,
+          });
+          for (const p of mod.procs) {
+            if (p.kind !== 'proc' || this.procs.has(p.name)) continue;
+            this.procs.set(p.name, { name: p.name, args: p.args, of: null, binary: true });
+            this.binaryProcs.add(p.name);
           }
         }
       }

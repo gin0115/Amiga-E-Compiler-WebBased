@@ -12,10 +12,19 @@
 import { Asm } from './asm68k.js';
 import { writeHunk } from './hunk.js';
 import { AsmText } from './asmtext.js';
+import { ifuncName } from './ifuncs.js';
+import { IFUNC_THUNKS } from './ifunc_thunks.js';
 
 const D0 = 0, D1 = 1, D2 = 2, D3 = 3, D4 = 4, D5 = 5, D6 = 6, D7 = 7;
 const A0 = 0, A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, A6 = 6, A7 = 7;
 const COND = Asm.COND;
+
+// A4 points this many bytes into the globals area so the standard E runtime
+// globals can live at EC's fixed NEGATIVE offsets (GLOBVARTAB; EC's GLOBOFF is
+// -512). Precompiled binary modules bake these offsets in, so ecomp must match
+// the ABI — see docs/oop-dispatch.md / EC733_v33a.S:16356. ecomp's own runtime
+// and all program/module data globals live at positive offsets from A4.
+const A4_ORIGIN = 512;
 
 const CMP_COND = { '=': 'EQ', '<>': 'NE', '<': 'LT', '>': 'GT', '<=': 'LE', '>=': 'GE' };
 
@@ -37,12 +46,19 @@ export class Codegen {
     this.lists = [];            // static areas for immediate lists
     this.quotes = [];           // out-of-line code for quoted expressions
     this.nlabel = 0;
-    // fixed runtime slots: stdout, dosbase, heap chain, startup SP, exit
-    // code, exception state, handler chain head
+    // Standard E runtime globals at EC's fixed A4 offsets (GLOBVARTAB,
+    // EC733_v33a.S:16356) so precompiled binary modules — which reference these
+    // directly, with no GLOBS entry — find them. ecomp's own runtime globals
+    // and all program/module data globals are allocated at POSITIVE offsets.
     this.globalSlots = new Map([
-      ['__stdout', 0], ['stdout', 0], ['__dosbase', 4], ['__heap', 8],
-      ['__startsp', 12], ['__exitcode', 16],
-      ['exception', 20], ['exceptioninfo', 24], ['__ehead', 28],
+      ['stdout', -8], ['__stdout', -8], ['conout', -12], ['stdrast', -16],
+      ['arg', -32], ['wbmessage', -36], ['execbase', -40],
+      ['dosbase', -44], ['__dosbase', -44], ['intuitionbase', -48], ['gfxbase', -52],
+      ['__mathbase', -56], ['__mathtrans', -60],
+      ['exception', -84], ['stdin', -92], ['exceptioninfo', -96],
+      // ecomp-internal runtime slots (positive side of A4; offsets unchanged
+      // from before the ABI alignment so existing fixed references still hold)
+      ['__heap', 8], ['__startsp', 12], ['__exitcode', 16], ['__ehead', 28],
     ]);
     this.globalSize = 32;
     this.globalTypes = new Map();
@@ -107,6 +123,14 @@ export class Codegen {
     // are used (singbas is ROM-resident and cheap, opened always)
     this.usesTrans = /"name":"F(sin|cos|tan|exp|log|log10|pow|sqrt|atan|asin|acos)"/
       .test(JSON.stringify(program));
+    // a linked binary module may itself call a transcendental intrinsic
+    // (Fsin/Fcos/…) — open mathieeesingtrans for it too
+    const TRANS = /^F(sin|cos|tan|exp|log|log10|pow|sqrt|atan|asin|acos|sincos)$/;
+    for (const m of this.sem.binaryModules ?? []) {
+      for (const r of m.relocs ?? []) {
+        if (r.kind === 'ifunc' && TRANS.test(ifuncName(r.ifuncNum) ?? '')) this.usesTrans = true;
+      }
+    }
     this.emitStartup();
     this.emitRuntime();
     for (const p of program.procs) this.emitProc(p);
@@ -114,9 +138,120 @@ export class Codegen {
       const label = p.of ? `proc_${p.of}$${p.name}` : `proc_${p.name}`;
       if (!this.a.labels.has(label)) this.emitProc(p);
     }
+    this.emitBinaryModules();
     this.emitData();
     if (this.errors.length) return null;
-    return writeHunk(a.finish());
+    const code = a.finish();
+    return writeHunk(code, a.relocs);
+  }
+
+  // Classify a module's external-global base name: library (OpenLibrary),
+  // resource (OpenResource), or null (E-runtime global / module-internal data,
+  // bound to its own A4 slot). libname = strip 'base' + '.library' with a few
+  // irregular overrides.
+  static moduleOpenInfo(base) {
+    const RESOURCE = {
+      battclockbase: 'battclock.resource', battmembase: 'battmem.resource',
+      diskbase: 'disk.resource', miscbase: 'misc.resource', potgobase: 'potgo.resource',
+      cardresbase: 'card.resource', filesysresbase: 'FileSystem.resource',
+    };
+    const LIBOVERRIDE = {
+      rexxsysbase: 'rexxsyslib.library', cxbase: 'commodities.library',
+      gfxbase: 'graphics.library', sysbase: 'exec.library', execbase: 'exec.library',
+    };
+    if (RESOURCE[base]) return { kind: 'resource', name: RESOURCE[base] };
+    if (LIBOVERRIDE[base]) return { kind: 'lib', name: LIBOVERRIDE[base] };
+    if (/base$/.test(base)) return { kind: 'lib', name: base.replace(/base$/, '') + '.library' };
+    return null;   // ctrlc, sin_table, *count, catalogList … bound to own slot
+  }
+
+  // Link binary code modules: append each module's CODE blob, resolve its
+  // exported PROCs to labels inside it, emit the runtime intrinsic (ifunc)
+  // thunks it calls, and fix up its relocations.
+  emitBinaryModules() {
+    const mods = this.sem.binaryModules ?? [];
+    if (!mods.length) return;
+    const a = this.a;
+
+    // 1. which E intrinsics do the linked modules call? emit a thunk per name.
+    // deprecated intrinsics keep a `#…_OLD` table name but share the base
+    // implementation (e.g. #Not_OLD -> Not, #DisposeLink_OLD -> DisposeLink)
+    const norm = n => n && n.replace(/^#/, '').replace(/_OLD$/, '');
+    const needed = new Set();
+    const missing = new Set();
+    for (const m of mods) {
+      for (const r of m.relocs) {
+        if (r.kind !== 'ifunc') continue;
+        const name = norm(ifuncName(r.ifuncNum));
+        if (name && IFUNC_THUNKS[name]) needed.add(name);
+        else missing.add(name ?? `#${r.ifuncNum}`);
+      }
+    }
+    if (missing.size) {
+      this.err({ line: 0 }, `intrinsics not yet ported: ${[...missing].join(', ')}`);
+      return;
+    }
+    for (const name of needed) {
+      const label = `ifunc_${name}`;
+      if (a.labels.has(label)) continue;
+      a.align();
+      a.label(label);
+      IFUNC_THUNKS[name](a, this);     // some thunks need globalSlot (e.g. the pool)
+    }
+
+    // 2. append each module's code, resolve its procs, fix up its relocations.
+    for (const m of mods) {
+      a.align();
+      const base = a.pc;
+      a.blob(m.code);
+      for (const p of m.procs) {
+        if (p.kind === 'proc' || p.kind === 'label') {
+          const label = `proc_${p.name}`;
+          if (!a.labels.has(label)) a.labelAt(label, base + p.offset);
+        }
+      }
+      // class descriptor-builders live inside the module code at `delcode`
+      // (PC-relative LEAs, so no relocs) — label them for NEW to call.
+      for (const cls of this.sem.binaryClasses?.values() ?? []) {
+        if (cls.module === m.name && cls.delcode != null) {
+          const label = `moddescr_${cls.name}`;
+          if (!a.labels.has(label)) a.labelAt(label, base + cls.delcode);
+        }
+      }
+      for (const r of m.relocs) {
+        if (r.kind === 'abs') {
+          // rebase the absolute longword (a module-internal code/data pointer)
+          // to its final position, and record a HUNK_RELOC32 entry.
+          const at = base + r.offset;
+          const cur = ((a.bytes[at] << 24) | (a.bytes[at + 1] << 16) |
+            (a.bytes[at + 2] << 8) | a.bytes[at + 3]) >>> 0;
+          const nv = (cur + base) >>> 0;
+          a.bytes[at] = (nv >>> 24) & 0xff;
+          a.bytes[at + 1] = (nv >>> 16) & 0xff;
+          a.bytes[at + 2] = (nv >>> 8) & 0xff;
+          a.bytes[at + 3] = nv & 0xff;
+          a.reloc32At(at);
+        } else if (r.kind === 'ifunc') {
+          // patch the placeholder `jsr abs.L` (0x4EB9) to `bsr.L` (0x61FF) into
+          // the runtime thunk; the 32-bit operand becomes a PC-relative disp.
+          const op = base + r.offset - 2;
+          a.bytes[op] = 0x61;
+          a.bytes[op + 1] = 0xff;
+          a.bsr32At(base + r.offset, `ifunc_${norm(ifuncName(r.ifuncNum))}`);
+        }
+      }
+      // bind external-global refs: patch each A4-relative displacement to the
+      // shared slot for that symbol (library/resource base opened at startup,
+      // or a runtime/data slot).
+      for (const x of m.globs?.xrefs ?? []) {
+        const slot = this.globalSlot(x.name);
+        for (const off of x.refs) {
+          const at = base + off;
+          a.bytes[at] = (slot >> 8) & 0xff;
+          a.bytes[at + 1] = slot & 0xff;
+        }
+      }
+    }
   }
 
   emitStartup() {
@@ -146,9 +281,9 @@ export class Codegen {
     a.tstl(D0);
     a.beq('__quit');
     a.lea_pc('__globals', A4);
-    a.movel_a_disp(A7, 12, A4);        // SP for CleanUp() unwinding
-    a.movel_d_disp(D0, 4, A4);         // dosbase
-    if (this.globalSlots.has('dosbase')) a.movel_d_disp(D0, this.globalSlots.get('dosbase'), A4);
+    a.addal_imm(A4_ORIGIN, A4);        // A4 -> origin; standard globals lie below
+    a.movel_a_disp(A7, this.globalSlot('__startsp'), A4);  // SP for CleanUp() unwinding
+    a.movel_d_disp(D0, this.globalSlot('dosbase'), A4);    // dosbase
     a.movel_disp_d(44, A7, D0);        // command line ptr (pushed at entry)
     a.movel_d_disp(D0, this.globalSlot('arg'), A4);
     a.movel_d_disp(D7, this.globalSlot('wbmessage'), A4);
@@ -158,10 +293,10 @@ export class Codegen {
     a.movel_ad(A0, D0);
     a.movel_d_disp(D0, this.globalSlot('arg'), A4);
     a.label('__arg_cli');
-    a.movel_disp_a(4, A4, A6);
+    a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);
     a.jsr_disp(-60, A6);               // Output()
-    a.movel_d_disp(D0, 0, A4);         // stdout
-    a.movel_disp_a(4, A4, A6);
+    a.movel_d_disp(D0, this.globalSlot('stdout'), A4);     // stdout
+    a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);
     a.jsr_disp(-54, A6);               // Input()
     a.movel_d_disp(D0, this.globalSlot('stdin'), A4);
     if (this.globalSlots.has('execbase')) {
@@ -176,12 +311,34 @@ export class Codegen {
       this.globalSlot('__dsscratch3');
       a.lea_disp(scratch, A4, A0);
       a.movel_ad(A0, D1);
-      a.movel_disp_a(4, A4, A6);
+      a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);
       a.jsr_disp(-192, A6);              // DateStamp(d1)
       a.movel_disp_d(scratch + 4, A4, D0);
       a.movel_disp_d(scratch + 8, A4, D1);
       a.eorl_dd(D1, D0);
       a.movel_d_disp(D0, seedSlot, A4);
+    }
+    {
+      // exec memory pool for the String()/List()/DisposeLink() intrinsics that
+      // linked binary modules call (EC keeps this at -120(A4); CreatePool(NIL,
+      // 4096, 256) matches the original runtime).
+      const pool = this.globalSlot('__estrpool');
+      a.moveq(0, D0);
+      a.movel_imm(4096, D1);
+      a.movel_imm(256, D2);
+      a.movel_absw_a(4, A6);
+      a.jsr_disp(-696, A6);              // CreatePool
+      a.movel_d_disp(D0, pool, A4);
+    }
+    {
+      // task stack lower bound, for the FreeStack() intrinsic (EC keeps it at
+      // -64(A4)); read tc_SPLower (offset 58) from this task.
+      const sp = this.globalSlot('__splower');
+      a.moveq(0, D0); a.movel_da(D0, A1); a.movel_absw_a(4, A6);
+      a.jsr_disp(-294, A6);              // FindTask(NIL)
+      a.movel_da(D0, A0);
+      a.movel_disp_d(58, A0, D0);        // tc_SPLower
+      a.movel_d_disp(D0, sp, A4);
     }
     for (const gi of this.globalInits) {
       if (gi.kind === 'STRING') {
@@ -210,10 +367,43 @@ export class Codegen {
       a.jsr_disp(-552, A6);            // OpenLibrary
       a.movel_d_disp(D0, this.globalSlot(base), A4);
     }
+    // Open the libraries/resources that linked binary modules reference as
+    // external globals (GLOBS xrefs). Bases already auto-opened are skipped.
+    this.openedLibSlots = [];
+    {
+      const autoBases = new Set(['intuitionbase', 'gfxbase', '__mathbase', '__mathtrans']);
+      const seen = new Set();
+      for (const m of this.sem.binaryModules ?? []) {
+        for (const x of m.globs?.xrefs ?? []) {
+          const info = Codegen.moduleOpenInfo(x.name);
+          if (!info || autoBases.has(x.name) || seen.has(x.name)) continue;
+          seen.add(x.name);
+          const slot = this.globalSlot(x.name);
+          a.movel_absw_a(4, A6);
+          a.lea_pc(this.strLabel(info.name), A1);
+          if (info.kind === 'resource') {
+            a.jsr_disp(-498, A6);        // OpenResource(A1)
+          } else {
+            a.moveq(0, D0);
+            a.jsr_disp(-552, A6);        // OpenLibrary(A1, 0)
+            this.openedLibSlots.push(slot);
+          }
+          a.movel_d_disp(D0, slot, A4);
+        }
+      }
+    }
     a.bsr('proc_main');
     a.label('__exit');                 // CleanUp() lands here with SP restored
     a.bsr('__freeall');                // release NEW/New/String allocations
-    a.movel_disp_a(4, A4, A1);         // dosbase -> a1... via address reg
+    for (const slot of this.openedLibSlots ?? []) {   // close module libraries
+      a.movel_disp_a(slot, A4, A1);
+      a.tstl_disp(slot, A4);
+      a.beq(`__skipclose_${slot}`);
+      a.movel_absw_a(4, A6);
+      a.jsr_disp(-414, A6);            // CloseLibrary
+      a.label(`__skipclose_${slot}`);
+    }
+    a.movel_disp_a(this.globalSlot('dosbase'), A4, A1);    // dosbase -> a1
     a.movel_absw_a(4, A6);
     a.jsr_disp(-414, A6);              // CloseLibrary
     a.movel_disp_d(this.globalSlot('wbmessage'), A4, D2);
@@ -226,7 +416,7 @@ export class Codegen {
     a.movel_absw_a(4, A6);
     a.jsr_disp(-378, A6);              // ReplyMsg(wbmessage)
     a.label('__noreply');
-    a.movel_disp_d(16, A4, D0);        // exit code (set by CleanUp, else 0)
+    a.movel_disp_d(this.globalSlot('__exitcode'), A4, D0);  // exit code (CleanUp, else 0)
     a.movem_pop(0x7cfc);
     a.addql_a(4, A7);                  // drop saved command line ptr
     a.rts();
@@ -345,9 +535,9 @@ export class Codegen {
     a.movel_ad(A2, D3);
     a.subl_ad(A0, D3);                 // len
     a.movel_ad(A0, D2);                // buf
-    a.movel_disp_d(0, A4, D1);         // stdout
+    a.movel_disp_d(this.globalSlot('stdout'), A4, D1);     // stdout
     a.beq('__wf_nout');                // WB start: no console — drop output
-    a.movel_disp_a(4, A4, A6);         // dosbase
+    a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);    // dosbase
     a.jsr_disp(-48, A6);               // Write
     a.label('__wf_nout');
     a.unlk(A5);
@@ -480,7 +670,7 @@ export class Codegen {
     // {prev, sp, fp, resume-pc}; uncaught exceptions exit the program with
     // the value as return code.
     a.label('__raise');
-    a.movel_d_disp(D0, 20, A4);        // exception
+    a.movel_d_disp(D0, this.globalSlot('exception'), A4);  // exception
     a.movel_disp_d(28, A4, D1);        // handler chain head
     a.bne('__rs_caught');
     a.movel_d_disp(D0, 16, A4);        // exit code
@@ -1167,7 +1357,9 @@ export class Codegen {
     }
     a.align();
     a.label('__globals');
-    a.space(this.globalSize);
+    // A4 = __globals + A4_ORIGIN; standard globals occupy [origin-96, origin),
+    // ecomp/program globals [origin, origin+globalSize).
+    a.space(A4_ORIGIN + this.globalSize);
   }
 
   // ---------- procedures ----------
@@ -1254,7 +1446,7 @@ export class Codegen {
       if (!p.exceptDo) a.bra(afterExcept);
       // oracle-verified: `exception` is cleared only when EXCEPT DO is
       // entered via normal completion (the body still sees the old value)
-      else a.clrl_disp(20, A4);
+      else a.clrl_disp(this.globalSlot('exception'), A4);
       a.label(ctx.exceptLabel);
       a.movel_disp_d(ctx.excOff, A5, D0);   // unlink: head = frame.prev
       a.movel_d_disp(D0, 28, A4);
@@ -1663,6 +1855,27 @@ export class Codegen {
         for (const t of s.targets) {
           const v = t.kind === 'Index' ? t.obj : t;   // END p[10] frees via p
           if (v.kind !== 'Var') { this.err(s, 'END on plain variables only'); continue; }
+          // binary-module class: dispatch the destructor through the vtable
+          // (odestr slot) when non-NIL, then free — see docs/oop-dispatch.md
+          const bcls = this.binaryClassOf(v, ctx);
+          if (bcls) {
+            // odestr is the destructor's vtable slot, or 0xffff when the class
+            // has none (then END just frees the instance).
+            if (bcls.odestr && bcls.odestr !== 0xffff) {
+              this.loadVar(v.name, ctx, s);            // D0 = instance
+              const skip = this.uniq('endnil');
+              a.tstl(D0); a.beq(skip);
+              a.movel_da(D0, A0);                      // self in A0
+              a.movel_disp_a(0, A0, A1);               // descriptor
+              a.movel_disp_a(bcls.odestr, A1, A1);     // descriptor[odestr] = dtor
+              a.jsr_ind(A1);
+              a.label(skip);
+            }
+            this.loadVar(v.name, ctx, s);
+            a.bsr('__dispose');
+            this.storeVar(v.name, ctx, s);
+            continue;
+          }
           // ch_14: END runs the object's end() destructor when it has one
           const vt = this.typeOf(v, ctx);
           let objName = vt?.base === 'PTR' ? vt.to?.name : null;
@@ -1718,12 +1931,78 @@ export class Codegen {
     a.movel_ad(A0, D0);
   }
 
+  // ---------- binary-module class (vtable) dispatch — see docs/oop-dispatch.md
+  // A class from a binary .m dispatches through a runtime "descriptor" (vtable)
+  // built by the module's own code; self is passed in A0, args on the stack.
+
+  // The binary class for an expression's static type, or null (source classes
+  // and non-objects fall through to the existing static dispatch).
+  binaryClassOf(exp, ctx) {
+    const t = this.typeOf(exp, ctx);
+    const name = t?.base === 'PTR' ? t.to?.name : t?.name;
+    return name ? (this.sem.binaryClasses?.get(name) ?? null) : null;
+  }
+
+  // Lazily reserve globals for a class's descriptor: a pointer slot + the
+  // descriptor region itself (delsize bytes). Returns {ptrSlot, region}.
+  binaryClassGlobals(cls) {
+    this._bcGlobals = this._bcGlobals ?? new Map();
+    let g = this._bcGlobals.get(cls.name);
+    if (g) return g;
+    const ptrSlot = this.globalSlot(`__descrptr_${cls.name}`);
+    const region = this.globalSize;
+    this.globalSize += (cls.delsize + 1) & ~1;
+    g = { ptrSlot, region };
+    this._bcGlobals.set(cls.name, g);
+    return g;
+  }
+
+  // Build the descriptor into its globals region by calling the module's own
+  // builder (at moddescr_<class> = modbase+delcode), and stash the pointer.
+  // Idempotent — EC (re)builds at each NEW.
+  buildDescriptor(cls) {
+    const a = this.a;
+    const g = this.binaryClassGlobals(cls);
+    a.lea_disp(g.region, A4, A0);            // A0 = &descriptor region
+    a.movel_a_disp(A0, g.ptrSlot, A4);       // remember the descriptor pointer
+    a.jsr_abs(`moddescr_${cls.name}`);       // builder fills [A0]: size + methods
+  }
+
+  // obj.method(args): push args (left-to-right, same as binary procs), load
+  // self into A0, then `(A0)->A1; (slot,A1)->A1; jsr (A1)`. Result in D0.
+  emitBinaryMethodCall(cls, slot, objExp, args, ctx) {
+    const a = this.a;
+    for (const arg of args) { this.exp(arg, ctx); a.movel_d_push(D0); }
+    this.exp(objExp, ctx);                   // instance ptr -> D0
+    a.movel_da(D0, A0);                      // self in A0
+    a.movel_disp_a(0, A0, A1);               // A1 = descriptor = (A0)
+    a.movel_disp_a(slot, A1, A1);            // A1 = descriptor[slot] = method
+    a.jsr_ind(A1);
+    const pop = 4 * args.length;
+    if (pop) { if (pop <= 8) a.addql_a(pop, A7); else a.addal_imm(pop, A7); }
+  }
+
   // NEW p / NEW p[n] — allocate zeroed memory sized from p's pointer type
   genNew(lval, ctx, node) {
     const a = this.a;
     // constructor form: NEW a.create(args) — allocate, then call the method
     if (lval.kind === 'Call' && lval.callee.kind === 'Member') {
       const objExp = lval.callee.obj;
+      const bcls = this.binaryClassOf(objExp, ctx);
+      if (bcls) {
+        // binary-module class: build vtable, alloc OSIZE, set instance[0] =
+        // descriptor, then dispatch the constructor through the vtable.
+        this.buildDescriptor(bcls);
+        this.genNew(objExp, ctx, node);          // alloc OSIZE + store to objExp
+        this.exp(objExp, ctx);                   // D0 = instance
+        a.movel_da(D0, A0);
+        a.movel_disp_d(this.binaryClassGlobals(bcls).ptrSlot, A4, D1);
+        a.movel_d_ind(D1, A0);                   // instance[0] = descriptor ptr
+        if (bcls.ctorSlot != null)
+          this.emitBinaryMethodCall(bcls, bcls.ctorSlot, objExp, lval.args, ctx);
+        this.exp(objExp, ctx);                   // expression value is the object
+        return;
+      }
       this.genNew(objExp, ctx, node);
       this.call({ kind: 'Call', callee: lval.callee, args: lval.args }, ctx);
       this.exp(objExp, ctx);            // expression value is the object
@@ -2055,7 +2334,7 @@ export class Codegen {
       else a.movel_pop_d(n);
     }
     if (info.base === 'exec') a.movel_absw_a(4, A6);
-    else a.movel_disp_a(4, A4, A6);
+    else a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);   // dos
     a.jsr_disp(info.off, A6);
   }
 
@@ -2578,14 +2857,14 @@ export class Codegen {
         this.exp(e.args[0], ctx);
         a.movel_d_push(D0);
         this.exp(e.args[1], ctx);
-        a.movel_d_disp(D0, 24, A4);    // exceptioninfo
+        a.movel_d_disp(D0, this.globalSlot('exceptioninfo'), A4);  // exceptioninfo
         a.movel_pop_d(D0);
         a.bsr('__raise');
         return;
       }
       if (callee.name === 'ReThrow') {
         const skip = this.uniq('rethrow');
-        a.movel_disp_d(20, A4, D0);    // current exception
+        a.movel_disp_d(this.globalSlot('exception'), A4, D0);  // current exception
         a.beq(skip);
         a.bsr('__raise');
         a.label(skip);
@@ -2628,7 +2907,10 @@ export class Codegen {
         this.exp(arg, ctx);
         a.movel_d_push(D0);
       }
-      a.bsr(`proc_${callee.name}`);
+      // binary-module procs live in an appended code blob, possibly >32KB
+      // away, so call them absolute (with a reloc) rather than PC-relative bsr.
+      if (this.sem.binaryProcs?.has(callee.name)) a.jsr_abs(`proc_${callee.name}`);
+      else a.bsr(`proc_${callee.name}`);
       if (e.args.length) {
         if (e.args.length <= 2) a.addql_a(4 * e.args.length, A7);
         else a.addal_imm(4 * e.args.length, A7);
@@ -2636,6 +2918,14 @@ export class Codegen {
       return;
     }
     if (callee.kind === 'Member') {
+      // binary-module class: dispatch through the runtime vtable (self in A0)
+      const bcls = this.binaryClassOf(callee.obj, ctx);
+      if (bcls) {
+        const m = bcls.methods.get(callee.name);
+        if (!m) { this.err(e, `unknown method ${callee.name} on ${bcls.name}`); return; }
+        this.emitBinaryMethodCall(bcls, m.slot, callee.obj, e.args, ctx);
+        return;
+      }
       // method call o.m(args): static dispatch on the declared type,
       // walking the inheritance chain; self is the hidden first argument
       const ot = this.typeOf(callee.obj, ctx);
