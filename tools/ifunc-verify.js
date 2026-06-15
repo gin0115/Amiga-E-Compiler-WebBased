@@ -68,6 +68,7 @@ const CASES = [
   ['CtrlC', 'EXPORT PROC f() IS CtrlC()', 'f()'],
   ['AstrCopy', "EXPORT PROC f()\n  DEF s[20]:STRING\n  AstrCopy(s,'hello',20)\n  WriteF('\\s/\\d\\n', s, StrLen(s))\nENDPROC", 'f()', true],
   ['CleanUp', "EXPORT PROC f()\n  WriteF('before\\n')\n  CleanUp(0)\n  WriteF('after\\n')\nENDPROC", 'f()', true],
+  ['RealF', "EXPORT PROC f()\n  DEF s[20]:STRING\n  RealF(s,3.14159,2)\n  WriteF('\\s|', s)\n  RealF(s,2.5,3)\n  WriteF('\\s|', s)\n  RealF(s,42.0,0)\n  WriteF('\\s\\n', s)\nENDPROC", 'f()', true],
 ];
 
 let pass = 0, fail = 0;

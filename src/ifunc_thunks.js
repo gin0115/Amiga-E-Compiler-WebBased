@@ -12,7 +12,7 @@
 // © Wouter van Oortmerssen 1991-1997, used with permission. Each thunk mirrors
 // the original routine; add more as modules require them.
 import { Asm, pushMask, popMask, D0, D1, D2, D3, D4, D6, D7, A0, A1, A2, A3, A4, A5, A6, A7 } from './asm68k.js';
-const { MI, PL, EQ, GT } = Asm.COND;
+const { MI, PL, EQ, GT, GE } = Asm.COND;
 
 // Generic marshaller: an ifunc whose behaviour ecomp already implements as a
 // fixed-register runtime routine (args in D0,D1,D2…; result in D0 — see
@@ -380,6 +380,87 @@ export const IFUNC_THUNKS = {
     a.moveq(-1, D0); a.rts();
     a.label('_ifn_cc_1'); a.moveq(0, D0); a.rts();
   },
+  // I_REALF(string, float, decimals) — format `float` to `decimals` places into
+  // the estring. 1-for-1 with ec68kifuncs.asm: round via mathieeesingbas
+  // (-56(A4)), emit the integer part through RawDoFmt with a built "%0N.Nld"
+  // format, then the fraction. Args at 4/8/12(A7) after the bsr.l.
+  RealF(a) {
+    a.movel_disp_a(12, A7, A2);                   // A2 = dest estring
+    a.clrw_disp(-2, A2);                          // len = 0
+    a.movel_disp_d(8, A7, D2);                    // D2 = float
+    a.movel_disp_a(-56, A4, A6);                  // mathbas
+    a.movel_dd(D2, D0); a.jsr_disp(-48, A6);      // Tst
+    a.bcc(PL, '_ifn_rf_3');
+    a.moveq(0x2d, D0); a.bsr('_ifn_rf_adds');     // '-'
+    a.movel_dd(D2, D0); a.jsr_disp(-54, A6);      // Abs
+    a.movel_dd(D0, D2);
+    a.label('_ifn_rf_3');
+    a.movel_disp_d(4, A7, D1); a.asll_imm(2, D1); // decimals*4
+    a.lea_pc('_ifn_rf_rtab', A0); a.addal_d(D1, A0); a.movel_ind_d(A0, D1);
+    a.movel_dd(D2, D0); a.jsr_disp(-66, A6);      // Add (round)
+    a.movel_dd(D0, D2);
+    a.moveq(-1, D1); a.bsr('_ifn_rf_add');        // integer part (no zero-pad)
+    a.movel_disp_d(4, A7, D0); a.cmpil_imm(1, D0); a.bcc(MI, '_ifn_rf_done');
+    a.movel_disp_a(-56, A4, A6);
+    a.moveq(0x2e, D0); a.bsr('_ifn_rf_adds');     // '.'
+    a.movel_dd(D2, D0); a.jsr_disp(-90, A6);      // Floor
+    a.movel_dd(D0, D1);
+    a.movel_dd(D2, D0); a.jsr_disp(-72, A6);      // Sub -> fraction
+    a.movel_disp_d(4, A7, D1); a.subql(1, D1); a.asll_imm(2, D1);
+    a.lea_pc('_ifn_rf_tab', A0); a.addal_d(D1, A0); a.movel_ind_d(A0, D1);
+    a.jsr_disp(-78, A6);                          // Mul -> frac*10^dec
+    a.bsr('_ifn_rf_add');                         // fractional digits (zero-pad)
+    a.label('_ifn_rf_done');
+    a.movel_disp_d(12, A7, D0); a.rts();          // return the estring
+
+    // .PROC: RawDoFmt PutChProc -> (A3)+
+    a.label('_ifn_rf_proc'); a.moveb_d_postinc(D0, A3); a.rts();
+    // .ADDS: append char D0 to estring A2, bounds-checked; preserves D0/D2/A2
+    // (A1 is free across every .ADDS call site, so use it as the scratch addr)
+    a.label('_ifn_rf_adds');
+    a.movem_push(pushMask(D1, D2));
+    a.moveq(0, D1); a.movew_disp_d(-2, A2, D1);   // len
+    a.moveq(0, D2); a.movew_disp_d(-4, A2, D2);   // maxlen
+    a.cmpl_dd(D2, D1); a.bcc(GE, '_ifn_rf_adds1');
+    a.movel_aa(A2, A1); a.addal_d(D1, A1);
+    a.moveb_d_ind(D0, A1); a.clrb_disp(1, A1);
+    a.addqw_disp(1, -2, A2);
+    a.label('_ifn_rf_adds1'); a.movem_pop(popMask(D1, D2)); a.rts();
+    // float constant tables (rounding adds; 10^n multipliers) — IEEE single
+    a.label('_ifn_rf_rtab');
+    for (const v of [0x3f000000, 0x3d4ccccd, 0x3ba3d70a, 0x3a03126f, 0x3851b717,
+                     0x36a7c5ac, 0x350637bd, 0x3356bf95, 0x31abcc77]) a.w32(v);
+    a.label('_ifn_rf_tab');
+    for (const v of [0x41200000, 0x42c80000, 0x447a0000, 0x461c4000, 0x47c35000,
+                     0x49742400, 0x4b189680, 0x4cbebc20]) a.w32(v);
+    // .ADD: integer part of float D0 -> digits in the estring (D1<0 = no pad)
+    a.label('_ifn_rf_add');
+    a.movel_d_push(D1);                           // save pad flag
+    a.jsr_disp(-90, A6); a.jsr_disp(-30, A6);     // Floor, Fix -> D0 = integer
+    a.movel_pop_d(D1);
+    a.lea_disp(-32, A7, A7); a.movel_aa(A7, A3);  // 32-byte scratch, A3 = buffer
+    a.lea_pc('_ifn_rf_proc', A2);                 // A2 = PutChProc
+    a.lea_disp(16, A3, A0);                       // A0 = format buffer (scratch+16)
+    a.moveb_imm_postinc(0x25, A0);                // '%'
+    a.tstl(D1); a.bcc(MI, '_ifn_rf_2');
+    a.movel_disp_d(40, A7, D1); a.addiw_imm(0x30, D1);   // '0'+decimals
+    a.moveb_imm_postinc(0x30, A0);                // '0'
+    a.moveb_d_postinc(D1, A0);                    // width
+    a.moveb_imm_postinc(0x2e, A0);                // '.'
+    a.moveb_d_postinc(D1, A0);                    // precision
+    a.label('_ifn_rf_2');
+    a.moveb_imm_postinc(0x6c, A0); a.moveb_imm_postinc(0x64, A0); a.clrb_postinc(A0); // "ld\0"
+    a.lea_disp(16, A3, A0);                       // A0 = format string
+    a.lea_disp(28, A3, A1); a.movel_d_ind(D0, A1);// A1 = data = integer
+    a.movel_absw_a(4, A6); a.jsr_disp(-522, A6);  // RawDoFmt
+    a.movel_disp_a(48, A7, A2);                   // A2 = dest estring (4+12+32)
+    a.movel_aa(A7, A3);                           // A3 = formatted buffer
+    a.label('_ifn_rf_addl');
+    a.moveb_postinc_d(A3, D0); a.bcc(EQ, '_ifn_rf_addo');
+    a.bsr('_ifn_rf_adds'); a.bra('_ifn_rf_addl');
+    a.label('_ifn_rf_addo'); a.lea_disp(32, A7, A7); a.rts();
+  },
+
   // I_CLEANUP: exit the program with a return code — route to ecomp's own exit
   // path (exitcode at 16(A4), restore startup SP from 12(A4), then __exit does
   // freeall + close libs + WB reply). Does not return.

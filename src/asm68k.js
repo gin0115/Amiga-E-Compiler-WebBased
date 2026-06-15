@@ -119,6 +119,9 @@ export class Asm {
   clrb_predec(an) { this.w16(0x4220 | an); }                            // clr.b -(An)
   cmpib_imm(imm, dn) { this.w16(0x0c00 | dn); this.w16(imm & 0xff); }   // cmpi.b #i,Dn
   cmpiw_imm(imm, dn) { this.w16(0x0c40 | dn); this.w16(imm & 0xffff); } // cmpi.w #i,Dn
+  cmpil_imm(imm, dn) { this.w16(0x0c80 | dn); this.w32(imm); }          // cmpi.l #i,Dn
+  addiw_imm(imm, dn) { this.w16(0x0640 | dn); this.w16(imm & 0xffff); } // addi.w #i,Dn
+  addqw_disp(q, d, an) { this.w16(0x5068 | (q === 8 ? 0 : q) << 9 | an); this.w16(d); } // addq.w #q,d16(An)
   addib_imm(imm, dn) { this.w16(0x0600 | dn); this.w16(imm & 0xff); }   // addi.b #i,Dn
   movew_d_push(dn) { this.w16(0x3f00 | dn); }                           // move.w Dn,-(a7)
   movew_pop_d(dn) { this.w16(0x301f | dn << 9); }                       // move.w (a7)+,Dn
@@ -146,6 +149,7 @@ export class Asm {
   addal_d(dn, an) { this.w16(0xd1c0 | an << 9 | dn); }                        // adda.l Dn,Am
   cmpb_dd(src, dst) { this.w16(0xb000 | dst << 9 | src); }                    // cmp.b Ds,Dd
   clrb_ind(an) { this.w16(0x4210 | an); }                                     // clr.b (An)
+  clrb_postinc(an) { this.w16(0x4218 | an); }                                 // clr.b (An)+
   cmpb_postinc_d(an, dn) { this.w16(0xb018 | dn << 9 | an); }                 // cmp.b (Am)+,Dn
   tstb_postinc(an) { this.w16(0x4a18 | an); }                                 // tst.b (An)+
   cmpml_postinc(src, dst) { this.w16(0xb188 | dst << 9 | src); }              // cmpm.l (As)+,(Ad)+
