@@ -2185,9 +2185,16 @@ export class Codegen {
       }
       case 'AddrOf': {
         const r = this.varRef(e.name, ctx);
-        if (!r) { this.err(e, `unknown variable {${e.name}}`); break; }
-        a.lea_disp(r.disp, r.kind === 'global' ? A4 : A5, A0);
-        a.movel_ad(A0, D0);
+        if (r) {
+          a.lea_disp(r.disp, r.kind === 'global' ? A4 : A5, A0);
+          a.movel_ad(A0, D0);
+        } else if (this.sem.procs.has(e.name)) {
+          // {proc} — a procedure's address (a callback / function pointer, as
+          // EasyGUI action procs and hooks use). PC-relative lea yields the
+          // absolute runtime address with no relocation.
+          a.lea_pc(`proc_${e.name}`, A0);
+          a.movel_ad(A0, D0);
+        } else { this.err(e, `unknown variable {${e.name}}`); break; }
         break;
       }
       case 'Sizeof': {
