@@ -19,6 +19,13 @@ const D0 = 0, D1 = 1, D2 = 2, D3 = 3, D4 = 4, D5 = 5, D6 = 6, D7 = 7;
 const A0 = 0, A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, A6 = 6, A7 = 7;
 const COND = Asm.COND;
 
+// A4 points this many bytes into the globals area so the standard E runtime
+// globals can live at EC's fixed NEGATIVE offsets (GLOBVARTAB; EC's GLOBOFF is
+// -512). Precompiled binary modules bake these offsets in, so ecomp must match
+// the ABI — see docs/oop-dispatch.md / EC733_v33a.S:16356. ecomp's own runtime
+// and all program/module data globals live at positive offsets from A4.
+const A4_ORIGIN = 512;
+
 const CMP_COND = { '=': 'EQ', '<>': 'NE', '<': 'LT', '>': 'GT', '<=': 'LE', '>=': 'GE' };
 
 function typeSize(t) {
@@ -39,12 +46,18 @@ export class Codegen {
     this.lists = [];            // static areas for immediate lists
     this.quotes = [];           // out-of-line code for quoted expressions
     this.nlabel = 0;
-    // fixed runtime slots: stdout, dosbase, heap chain, startup SP, exit
-    // code, exception state, handler chain head
+    // Standard E runtime globals at EC's fixed A4 offsets (GLOBVARTAB,
+    // EC733_v33a.S:16356) so precompiled binary modules — which reference these
+    // directly, with no GLOBS entry — find them. ecomp's own runtime globals
+    // and all program/module data globals are allocated at POSITIVE offsets.
     this.globalSlots = new Map([
-      ['__stdout', 0], ['stdout', 0], ['__dosbase', 4], ['__heap', 8],
-      ['__startsp', 12], ['__exitcode', 16],
-      ['exception', 20], ['exceptioninfo', 24], ['__ehead', 28],
+      ['stdout', -8], ['__stdout', -8], ['conout', -12], ['stdrast', -16],
+      ['arg', -32], ['wbmessage', -36], ['execbase', -40],
+      ['dosbase', -44], ['__dosbase', -44], ['intuitionbase', -48], ['gfxbase', -52],
+      ['exception', -84], ['stdin', -92], ['exceptioninfo', -96],
+      // ecomp-internal runtime slots (positive side of A4; offsets unchanged
+      // from before the ABI alignment so existing fixed references still hold)
+      ['__heap', 8], ['__startsp', 12], ['__exitcode', 16], ['__ehead', 28],
     ]);
     this.globalSize = 32;
     this.globalTypes = new Map();
@@ -259,9 +272,9 @@ export class Codegen {
     a.tstl(D0);
     a.beq('__quit');
     a.lea_pc('__globals', A4);
-    a.movel_a_disp(A7, 12, A4);        // SP for CleanUp() unwinding
-    a.movel_d_disp(D0, 4, A4);         // dosbase
-    if (this.globalSlots.has('dosbase')) a.movel_d_disp(D0, this.globalSlots.get('dosbase'), A4);
+    a.addal_imm(A4_ORIGIN, A4);        // A4 -> origin; standard globals lie below
+    a.movel_a_disp(A7, this.globalSlot('__startsp'), A4);  // SP for CleanUp() unwinding
+    a.movel_d_disp(D0, this.globalSlot('dosbase'), A4);    // dosbase
     a.movel_disp_d(44, A7, D0);        // command line ptr (pushed at entry)
     a.movel_d_disp(D0, this.globalSlot('arg'), A4);
     a.movel_d_disp(D7, this.globalSlot('wbmessage'), A4);
@@ -271,10 +284,10 @@ export class Codegen {
     a.movel_ad(A0, D0);
     a.movel_d_disp(D0, this.globalSlot('arg'), A4);
     a.label('__arg_cli');
-    a.movel_disp_a(4, A4, A6);
+    a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);
     a.jsr_disp(-60, A6);               // Output()
-    a.movel_d_disp(D0, 0, A4);         // stdout
-    a.movel_disp_a(4, A4, A6);
+    a.movel_d_disp(D0, this.globalSlot('stdout'), A4);     // stdout
+    a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);
     a.jsr_disp(-54, A6);               // Input()
     a.movel_d_disp(D0, this.globalSlot('stdin'), A4);
     if (this.globalSlots.has('execbase')) {
@@ -289,7 +302,7 @@ export class Codegen {
       this.globalSlot('__dsscratch3');
       a.lea_disp(scratch, A4, A0);
       a.movel_ad(A0, D1);
-      a.movel_disp_a(4, A4, A6);
+      a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);
       a.jsr_disp(-192, A6);              // DateStamp(d1)
       a.movel_disp_d(scratch + 4, A4, D0);
       a.movel_disp_d(scratch + 8, A4, D1);
@@ -381,7 +394,7 @@ export class Codegen {
       a.jsr_disp(-414, A6);            // CloseLibrary
       a.label(`__skipclose_${slot}`);
     }
-    a.movel_disp_a(4, A4, A1);         // dosbase -> a1... via address reg
+    a.movel_disp_a(this.globalSlot('dosbase'), A4, A1);    // dosbase -> a1
     a.movel_absw_a(4, A6);
     a.jsr_disp(-414, A6);              // CloseLibrary
     a.movel_disp_d(this.globalSlot('wbmessage'), A4, D2);
@@ -394,7 +407,7 @@ export class Codegen {
     a.movel_absw_a(4, A6);
     a.jsr_disp(-378, A6);              // ReplyMsg(wbmessage)
     a.label('__noreply');
-    a.movel_disp_d(16, A4, D0);        // exit code (set by CleanUp, else 0)
+    a.movel_disp_d(this.globalSlot('__exitcode'), A4, D0);  // exit code (CleanUp, else 0)
     a.movem_pop(0x7cfc);
     a.addql_a(4, A7);                  // drop saved command line ptr
     a.rts();
@@ -513,9 +526,9 @@ export class Codegen {
     a.movel_ad(A2, D3);
     a.subl_ad(A0, D3);                 // len
     a.movel_ad(A0, D2);                // buf
-    a.movel_disp_d(0, A4, D1);         // stdout
+    a.movel_disp_d(this.globalSlot('stdout'), A4, D1);     // stdout
     a.beq('__wf_nout');                // WB start: no console — drop output
-    a.movel_disp_a(4, A4, A6);         // dosbase
+    a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);    // dosbase
     a.jsr_disp(-48, A6);               // Write
     a.label('__wf_nout');
     a.unlk(A5);
@@ -648,7 +661,7 @@ export class Codegen {
     // {prev, sp, fp, resume-pc}; uncaught exceptions exit the program with
     // the value as return code.
     a.label('__raise');
-    a.movel_d_disp(D0, 20, A4);        // exception
+    a.movel_d_disp(D0, this.globalSlot('exception'), A4);  // exception
     a.movel_disp_d(28, A4, D1);        // handler chain head
     a.bne('__rs_caught');
     a.movel_d_disp(D0, 16, A4);        // exit code
@@ -1335,7 +1348,9 @@ export class Codegen {
     }
     a.align();
     a.label('__globals');
-    a.space(this.globalSize);
+    // A4 = __globals + A4_ORIGIN; standard globals occupy [origin-96, origin),
+    // ecomp/program globals [origin, origin+globalSize).
+    a.space(A4_ORIGIN + this.globalSize);
   }
 
   // ---------- procedures ----------
@@ -1422,7 +1437,7 @@ export class Codegen {
       if (!p.exceptDo) a.bra(afterExcept);
       // oracle-verified: `exception` is cleared only when EXCEPT DO is
       // entered via normal completion (the body still sees the old value)
-      else a.clrl_disp(20, A4);
+      else a.clrl_disp(this.globalSlot('exception'), A4);
       a.label(ctx.exceptLabel);
       a.movel_disp_d(ctx.excOff, A5, D0);   // unlink: head = frame.prev
       a.movel_d_disp(D0, 28, A4);
@@ -2310,7 +2325,7 @@ export class Codegen {
       else a.movel_pop_d(n);
     }
     if (info.base === 'exec') a.movel_absw_a(4, A6);
-    else a.movel_disp_a(4, A4, A6);
+    else a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);   // dos
     a.jsr_disp(info.off, A6);
   }
 
@@ -2833,14 +2848,14 @@ export class Codegen {
         this.exp(e.args[0], ctx);
         a.movel_d_push(D0);
         this.exp(e.args[1], ctx);
-        a.movel_d_disp(D0, 24, A4);    // exceptioninfo
+        a.movel_d_disp(D0, this.globalSlot('exceptioninfo'), A4);  // exceptioninfo
         a.movel_pop_d(D0);
         a.bsr('__raise');
         return;
       }
       if (callee.name === 'ReThrow') {
         const skip = this.uniq('rethrow');
-        a.movel_disp_d(20, A4, D0);    // current exception
+        a.movel_disp_d(this.globalSlot('exception'), A4, D0);  // current exception
         a.beq(skip);
         a.bsr('__raise');
         a.label(skip);

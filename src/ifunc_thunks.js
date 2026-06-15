@@ -89,13 +89,13 @@ export const IFUNC_THUNKS = {
   FastDispose(a) { a.movel_disp_d(8, A7, D0); a.bsr('__dispose'); a.rts(); },
   // Raise(e) — set the exception value and unwind to the innermost HANDLE frame
   Raise(a) { a.movel_disp_d(4, A7, D0); a.bsr('__raise'); a.rts(); },
-  // Throw(e, info) — also fills exceptioninfo (slot 24), then raises
+  // Throw(e, info) — also fills exceptioninfo (EC -96(A4)), then raises
   Throw(a) {
-    a.movel_disp_d(4, A7, D0); a.movel_d_disp(D0, 24, A4);
+    a.movel_disp_d(4, A7, D0); a.movel_d_disp(D0, -96, A4);
     a.movel_disp_d(8, A7, D0); a.bsr('__raise'); a.rts();
   },
-  // ReThrow — re-raise the current exception (slot 20)
-  ReThrow(a) { a.movel_disp_d(20, A4, D0); a.bsr('__raise'); a.rts(); },
+  // ReThrow — re-raise the current exception (EC -84(A4))
+  ReThrow(a) { a.movel_disp_d(-84, A4, D0); a.bsr('__raise'); a.rts(); },
 
   // ---- simple string/list accessors (verbatim from ec68kifuncs.asm) ----
   // I_NOT (#Not_OLD): MOVE.L 4(A7),D0 / NOT.L D0 / RTS
@@ -178,7 +178,7 @@ export const IFUNC_THUNKS = {
   // I_WRITEF — the format engine. EC-compiled modules store format strings
   // pre-translated for exec RawDoFmt (that's why the original uses it), so we
   // format via RawDoFmt into a buffer and dos Write it to stdout. 1-for-1 with
-  // ec68kifuncs.asm I_WRITEF, adapted to ecomp's A4 slots (stdout=0, dosbase=4)
+  // ec68kifuncs.asm I_WRITEF, using EC's A4 slots (stdout=-8, dosbase=-44)
   // and a LINK-frame scratch buffer instead of EC's -64(A4).
   // Stack: 4(A7)=arg-block size in bytes, 8(A7)=args (RawDoFmt data stream),
   // 8(A7)+size = format string. Returns the byte count written in D0.
@@ -197,9 +197,9 @@ export const IFUNC_THUNKS = {
     a.movel_da(D2, A0);                    // strlen the result
     a.label('_ifn_wf_len'); a.tstb_postinc(A0); a.bne('_ifn_wf_len');
     a.movel_ad(A0, D3); a.subl_dd(D2, D3); a.subql(1, D3);   // D3 = len (excl nul)
-    a.movel_disp_d(0, A4, D1);             // stdout handle
+    a.movel_disp_d(-8, A4, D1);            // stdout handle (EC -8(A4))
     a.beq('_ifn_wf_done');                 // WB / no console: drop output
-    a.movel_disp_a(4, A4, A6);             // dosbase
+    a.movel_disp_a(-44, A4, A6);           // dosbase (EC -44(A4))
     a.jsr_disp(-48, A6);                   // Write(D1, D2, D3)
     a.label('_ifn_wf_done');
     a.movel_dd(D3, D0);                    // return length
@@ -287,7 +287,7 @@ export const IFUNC_THUNKS = {
     a.movem_push(pushMask(D4, D6, D7));
     a.movel_disp_d(16, A7, D1);          // filename (orig 4(A7) + 12)
     a.moveq(-2, D2);                     // ACCESS_READ
-    a.movel_disp_a(4, A4, A6);           // dosbase
+    a.movel_disp_a(-44, A4, A6);         // dosbase (EC -44(A4))
     a.jsr_disp(-84, A6);                 // Lock
     a.movel_dd(D0, D7); a.beq('_ifn_fl_nolock');
     a.movel_dd(D0, D1);
