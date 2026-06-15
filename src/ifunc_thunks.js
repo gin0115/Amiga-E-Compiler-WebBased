@@ -11,7 +11,7 @@
 //
 // © Wouter van Oortmerssen 1991-1997, used with permission. Each thunk mirrors
 // the original routine; add more as modules require them.
-import { Asm, D0, D1, D2, D3, A0, A1, A2, A3, A4, A5, A6, A7 } from './asm68k.js';
+import { Asm, pushMask, popMask, D0, D1, D2, D3, D4, D6, D7, A0, A1, A2, A3, A4, A5, A6, A7 } from './asm68k.js';
 const { MI, PL, EQ, GT } = Asm.COND;
 
 // Generic marshaller: an ifunc whose behaviour ecomp already implements as a
@@ -275,6 +275,38 @@ export const IFUNC_THUNKS = {
   FastDisposeList(a) { a.movel_disp_d(4, A7, D0); a.bsr('__dispose'); a.rts(); },
   // Val(string, lenadr) -> value; reuse ecomp's __val (D0=string -> D0=value)
   Val(a) { a.movel_disp_d(8, A7, D0); a.bsr('__val'); a.rts(); },
+  // I_FREESTACK: bytes of stack left = SP - SPLower - 1000 (safety margin)
+  FreeStack(a, cg) {
+    const sp = cg.globalSlot('__splower');
+    a.movel_ad(A7, D0); a.movel_disp_d(sp, A4, D1); a.subl_dd(D1, D0);
+    a.movel_imm(1000, D1); a.subl_dd(D1, D0); a.rts();
+  },
+  // I_FILELENGTH: Lock the named file, Examine into a stack FileInfoBlock,
+  // return fib_Size (or -1). FIB must be longword-aligned for the BPTR.
+  FileLength(a) {
+    a.movem_push(pushMask(D4, D6, D7));
+    a.movel_disp_d(16, A7, D1);          // filename (orig 4(A7) + 12)
+    a.moveq(-2, D2);                     // ACCESS_READ
+    a.movel_disp_a(4, A4, A6);           // dosbase
+    a.jsr_disp(-84, A6);                 // Lock
+    a.movel_dd(D0, D7); a.beq('_ifn_fl_nolock');
+    a.movel_dd(D0, D1);
+    a.movel_imm(-260, D4);
+    a.movel_ad(A7, D0); a.moveq(2, D2); a.andl_dd(D2, D0); a.beq('_ifn_fl_al');
+    a.subql(2, D4);
+    a.label('_ifn_fl_al');
+    a.addal_d(D4, A7);                   // allocate FIB on the stack
+    a.movel_ad(A7, D2);                  // FIB ptr
+    a.jsr_disp(-102, A6);                // Examine
+    a.movel_disp_d(124, A7, D6);         // fib_Size
+    a.negl(D4); a.addal_d(D4, A7);       // pop the FIB
+    a.tstl(D0); a.beq('_ifn_fl_exfail');
+    a.bsr('_ifn_fl_unlock');
+    a.movel_dd(D6, D0); a.movem_pop(popMask(D4, D6, D7)); a.rts();
+    a.label('_ifn_fl_unlock'); a.movel_dd(D7, D1); a.jsr_disp(-90, A6); a.rts();  // UnLock
+    a.label('_ifn_fl_exfail'); a.bsr('_ifn_fl_unlock');
+    a.label('_ifn_fl_nolock'); a.moveq(-1, D0); a.movem_pop(popMask(D4, D6, D7)); a.rts();
+  },
 
   // I_SETLIST: set list length (clamped to max at -4)
   SetList(a) {

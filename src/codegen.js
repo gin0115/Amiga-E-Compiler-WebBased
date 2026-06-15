@@ -300,6 +300,16 @@ export class Codegen {
       a.jsr_disp(-696, A6);              // CreatePool
       a.movel_d_disp(D0, pool, A4);
     }
+    {
+      // task stack lower bound, for the FreeStack() intrinsic (EC keeps it at
+      // -64(A4)); read tc_SPLower (offset 58) from this task.
+      const sp = this.globalSlot('__splower');
+      a.moveq(0, D0); a.movel_da(D0, A1); a.movel_absw_a(4, A6);
+      a.jsr_disp(-294, A6);              // FindTask(NIL)
+      a.movel_da(D0, A0);
+      a.movel_disp_d(58, A0, D0);        // tc_SPLower
+      a.movel_d_disp(D0, sp, A4);
+    }
     for (const gi of this.globalInits) {
       if (gi.kind === 'STRING') {
         a.movew_imm_disp(gi.count, gi.buf, A4);
