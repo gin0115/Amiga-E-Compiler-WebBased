@@ -144,6 +144,7 @@ export class Asm {
   cmpb_postinc_d(an, dn) { this.w16(0xb018 | dn << 9 | an); }                 // cmp.b (Am)+,Dn
   tstb_postinc(an) { this.w16(0x4a18 | an); }                                 // tst.b (An)+
   cmpml_postinc(src, dst) { this.w16(0xb188 | dst << 9 | src); }              // cmpm.l (As)+,(Ad)+
+  movel_postinc_postinc(src, dst) { this.w16(0x20d8 | dst << 9 | src); }      // move.l (As)+,(Ad)+
 
   // ---- compare-to-boolean (E TRUE = -1) ----
   scc(cond, dn) { this.w16(0x50c0 | cond << 8 | dn); }

@@ -60,6 +60,9 @@ const CASES = [
   ['String', "EXPORT PROC f()\n  DEF s\n  s:=String(20)\n  StrCopy(s,'pooled')\n  WriteF('\\s/\\d\\n', s, StrMax(s))\nENDPROC", 'f()', true],
   ['DisposeLink', "EXPORT PROC f()\n  DEF s\n  s:=String(10)\n  StrCopy(s,'hi')\n  DisposeLink(s)\nENDPROC IF s THEN 1 ELSE 0", 'f()'],
   ['List', "EXPORT PROC f()\n  DEF l\n  l:=List(5)\n  WriteF('lmax=\\d\\n', ListMax(l))\nENDPROC", 'f()', true],
+  ['SetList', "EXPORT PROC f()\n  DEF a[5]:LIST\n  SetList(a,3)\n  WriteF('\\d\\n', ListLen(a))\nENDPROC", 'f()', true],
+  ['ListAdd', "EXPORT PROC f()\n  DEF a[5]:LIST\n  ListAdd(a,[7,8,9])\n  WriteF('\\d,\\d,\\d/\\d\\n', a[0],a[1],a[2],ListLen(a))\nENDPROC", 'f()', true],
+  ['ListCopy', "EXPORT PROC f()\n  DEF a[5]:LIST,b[5]:LIST\n  ListAdd(a,[1,2])\n  ListCopy(b,a)\n  WriteF('\\d,\\d/\\d\\n', b[0],b[1],ListLen(b))\nENDPROC", 'f()', true],
 ];
 
 let pass = 0, fail = 0;

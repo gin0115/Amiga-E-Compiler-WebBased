@@ -12,7 +12,7 @@
 // © Wouter van Oortmerssen 1991-1997, used with permission. Each thunk mirrors
 // the original routine; add more as modules require them.
 import { Asm, D0, D1, D2, D3, A0, A1, A2, A3, A4, A5, A6, A7 } from './asm68k.js';
-const { MI, PL, EQ } = Asm.COND;
+const { MI, PL, EQ, GT } = Asm.COND;
 
 // Generic marshaller: an ifunc whose behaviour ecomp already implements as a
 // fixed-register runtime routine (args in D0,D1,D2…; result in D0 — see
@@ -273,4 +273,45 @@ export const IFUNC_THUNKS = {
   },
   // FastDisposeList: FastNew lists live in the heap chain (FastNew -> __new)
   FastDisposeList(a) { a.movel_disp_d(4, A7, D0); a.bsr('__dispose'); a.rts(); },
+
+  // I_SETLIST: set list length (clamped to max at -4)
+  SetList(a) {
+    a.moveq(0, D0); a.movew_disp_d(6, A7, D0); a.movel_disp_a(8, A7, A0);
+    a.moveq(0, D1); a.movew_disp_d(-4, A0, D1); a.cmpl_dd(D1, D0);
+    a.bcc(GT, '_ifn_setl1'); a.movew_d_disp(D0, -2, A0); a.label('_ifn_setl1'); a.rts();
+  },
+  // I_LISTCOPY: copy LEN items src->dest (LEN=-1 => src length), clamp to dest max
+  ListCopy(a) {
+    a.movew_disp_d(6, A7, D0); a.extl(D0);                 // len (signed)
+    a.movel_disp_a(8, A7, A0); a.movel_disp_a(12, A7, A1); a.movel_aa(A1, A2);
+    a.moveq(-1, D1); a.cmpl_dd(D1, D0); a.bne('_ifn_lc1');
+    a.moveq(0, D0); a.movew_disp_d(-2, A0, D0);            // len := src length
+    a.label('_ifn_lc1');
+    a.moveq(0, D1); a.movew_disp_d(-4, A1, D1); a.cmpl_dd(D1, D0);
+    a.bcc(MI, '_ifn_lc2'); a.movel_dd(D1, D0);             // clamp to dest max
+    a.label('_ifn_lc2');
+    a.moveq(1, D1); a.cmpl_dd(D1, D0); a.bcc(MI, '_ifn_lc3');  // len<1 -> done
+    a.movew_d_disp(D0, -2, A1); a.subql(1, D0);
+    a.label('_ifn_lc_l'); a.movel_postinc_postinc(A0, A1); a.dbra(D0, '_ifn_lc_l');
+    a.label('_ifn_lc3'); a.movel_ad(A2, D0); a.rts();
+  },
+  // I_LISTADD: append LEN items src->dest (LEN=-1 => src length), up to dest free
+  ListAdd(a) {
+    a.movew_disp_d(6, A7, D0); a.extl(D0);
+    a.movel_disp_a(8, A7, A0); a.movel_disp_a(12, A7, A1); a.movel_aa(A1, A2);
+    a.moveq(-1, D1); a.cmpl_dd(D1, D0); a.bne('_ifn_la1');
+    a.moveq(0, D0); a.movew_disp_d(-2, A0, D0);            // count := src length
+    a.label('_ifn_la1');
+    a.moveq(0, D1); a.movew_disp_d(-4, A1, D1);            // dest max
+    a.moveq(0, D2); a.movew_disp_d(-2, A1, D2); a.subl_dd(D2, D1);   // D1 = free = max-len
+    a.cmpl_dd(D1, D0); a.bcc(MI, '_ifn_la2'); a.movel_dd(D1, D0);    // clamp count to free
+    a.label('_ifn_la2');
+    a.moveq(1, D1); a.cmpl_dd(D1, D0); a.bcc(MI, '_ifn_la3');        // count<1 -> done
+    a.moveq(0, D1); a.movew_disp_d(-2, A1, D1);            // D1 = old length
+    a.movel_dd(D1, D3); a.addl_dd(D0, D3); a.movew_d_disp(D3, -2, A1);  // new len = old+count
+    a.asll_imm(2, D1); a.addal_d(D1, A1);                 // A1 = base + oldlen*4 (append point)
+    a.subql(1, D0);
+    a.label('_ifn_la_l'); a.movel_postinc_postinc(A0, A1); a.dbra(D0, '_ifn_la_l');
+    a.label('_ifn_la3'); a.movel_ad(A2, D0); a.rts();
+  },
 };
