@@ -67,6 +67,7 @@ const CASES = [
   ['Mod', 'EXPORT PROC f(a,b) IS Mod(a,b)', 'f(17,5)'],
   ['CtrlC', 'EXPORT PROC f() IS CtrlC()', 'f()'],
   ['AstrCopy', "EXPORT PROC f()\n  DEF s[20]:STRING\n  AstrCopy(s,'hello',20)\n  WriteF('\\s/\\d\\n', s, StrLen(s))\nENDPROC", 'f()', true],
+  ['CleanUp', "EXPORT PROC f()\n  WriteF('before\\n')\n  CleanUp(0)\n  WriteF('after\\n')\nENDPROC", 'f()', true],
 ];
 
 let pass = 0, fail = 0;

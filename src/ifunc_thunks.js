@@ -380,6 +380,13 @@ export const IFUNC_THUNKS = {
     a.moveq(-1, D0); a.rts();
     a.label('_ifn_cc_1'); a.moveq(0, D0); a.rts();
   },
+  // I_CLEANUP: exit the program with a return code — route to ecomp's own exit
+  // path (exitcode at 16(A4), restore startup SP from 12(A4), then __exit does
+  // freeall + close libs + WB reply). Does not return.
+  CleanUp(a) {
+    a.movel_disp_d(4, A7, D0); a.movel_d_disp(D0, 16, A4);   // __exitcode
+    a.movel_disp_a(12, A4, A7); a.bra('__exit');             // SP <- __startsp
+  },
   // float ops: mathieeesingbas (base at -56(A4)) / mathieeesingtrans (-60(A4))
   Ffloor(a) { a.movel_disp_d(4, A7, D0); a.movel_disp_a(-56, A4, A6); a.jsr_disp(-90, A6); a.rts(); },
   Fceil(a)  { a.movel_disp_d(4, A7, D0); a.movel_disp_a(-56, A4, A6); a.jsr_disp(-96, A6); a.rts(); },
