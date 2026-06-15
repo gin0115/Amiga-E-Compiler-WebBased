@@ -273,6 +273,8 @@ export const IFUNC_THUNKS = {
   },
   // FastDisposeList: FastNew lists live in the heap chain (FastNew -> __new)
   FastDisposeList(a) { a.movel_disp_d(4, A7, D0); a.bsr('__dispose'); a.rts(); },
+  // Val(string, lenadr) -> value; reuse ecomp's __val (D0=string -> D0=value)
+  Val(a) { a.movel_disp_d(8, A7, D0); a.bsr('__val'); a.rts(); },
 
   // I_SETLIST: set list length (clamped to max at -4)
   SetList(a) {

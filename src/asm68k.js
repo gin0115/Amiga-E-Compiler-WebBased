@@ -103,6 +103,8 @@ export class Asm {
   lsrl_imm(q, dn) { this.w16(0xe088 | (q === 8 ? 0 : q) << 9 | dn); }
   addxl_dd(src, dst) { this.w16(0xd180 | dst << 9 | src); }
   mulsw_dd(src, dst) { this.w16(0xc1c0 | dst << 9 | src); }  // muls.w Ds,Dd (16x16->32)
+  muluw_dd(src, dst) { this.w16(0xc0c0 | dst << 9 | src); }  // mulu.w Ds,Dd (16x16->32 unsigned)
+  bset_dd(bit, dst) { this.w16(0x01c0 | bit << 9 | dst); }   // bset Dbit,Dd
   divsw_dd(src, dst) { this.w16(0x81c0 | dst << 9 | src); }  // divs.w Ds,Dd (32/16->16q,16r)
   swap(dn) { this.w16(0x4840 | dn); }
   asll_d(dq, dn) { this.w16(0xe1a0 | dq << 9 | dn); }   // asl.l Dq,Dn
