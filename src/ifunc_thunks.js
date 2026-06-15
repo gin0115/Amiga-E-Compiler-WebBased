@@ -11,7 +11,7 @@
 //
 // © Wouter van Oortmerssen 1991-1997, used with permission. Each thunk mirrors
 // the original routine; add more as modules require them.
-import { Asm, D0, D1, A0, A4, A6, A7 } from './asm68k.js';
+import { Asm, D0, D1, D2, D3, A0, A1, A2, A3, A4, A5, A6, A7 } from './asm68k.js';
 const { MI, PL, EQ } = Asm.COND;
 
 // Generic marshaller: an ifunc whose behaviour ecomp already implements as a
@@ -172,5 +172,63 @@ export const IFUNC_THUNKS = {
   Odd(a) {
     a.movel_disp_d(4, A7, D0); a.moveq(1, D1); a.andl_dd(D1, D0); a.bne('_ifn_odd1');
     a.moveq(0, D0); a.rts(); a.label('_ifn_odd1'); a.moveq(-1, D0); a.rts();
+  },
+
+  // I_WRITEF — the format engine. EC-compiled modules store format strings
+  // pre-translated for exec RawDoFmt (that's why the original uses it), so we
+  // format via RawDoFmt into a buffer and dos Write it to stdout. 1-for-1 with
+  // ec68kifuncs.asm I_WRITEF, adapted to ecomp's A4 slots (stdout=0, dosbase=4)
+  // and a LINK-frame scratch buffer instead of EC's -64(A4).
+  // Stack: 4(A7)=arg-block size in bytes, 8(A7)=args (RawDoFmt data stream),
+  // 8(A7)+size = format string. Returns the byte count written in D0.
+  WriteF(a) {
+    a.lea_disp(8, A7, A1);                 // A1 = RawDoFmt data stream (args)
+    a.lea_disp(8, A7, A0);                 // A0 = &(args + size) = &fmt
+    a.movel_disp_d(4, A7, D0); a.addal_d(D0, A0);
+    a.movel_ind_d(A0, D1); a.movel_da(D1, A0);   // A0 = fmt
+    a.movem_push(0x3030);                  // save d2,d3,a2,a3 (A0/A1 untouched)
+    a.link(A5, 256);
+    a.lea_disp(-256, A5, A3);              // A3 = output buffer (putdata)
+    a.movel_ad(A3, D2);                    // D2 = buffer start (RawDoFmt preserves d2-d7/a2-a6)
+    a.lea_pc('_ifn_wf_put', A2);           // A2 = PutChProc
+    a.movel_absw_a(4, A6);                 // exec
+    a.jsr_disp(-522, A6);                  // RawDoFmt
+    a.movel_da(D2, A0);                    // strlen the result
+    a.label('_ifn_wf_len'); a.tstb_postinc(A0); a.bne('_ifn_wf_len');
+    a.movel_ad(A0, D3); a.subl_dd(D2, D3); a.subql(1, D3);   // D3 = len (excl nul)
+    a.movel_disp_d(0, A4, D1);             // stdout handle
+    a.beq('_ifn_wf_done');                 // WB / no console: drop output
+    a.movel_disp_a(4, A4, A6);             // dosbase
+    a.jsr_disp(-48, A6);                   // Write(D1, D2, D3)
+    a.label('_ifn_wf_done');
+    a.movel_dd(D3, D0);                    // return length
+    a.unlk(A5);
+    a.movem_pop(0x0c0c);
+    a.rts();
+    a.label('_ifn_wf_put'); a.moveb_d_postinc(D0, A3); a.rts();   // RawDoFmt PutCh
+  },
+
+  // I_STRINGF — like WriteF but formats into an estring. RawDoFmt into a buffer,
+  // then copy into the estring via ecomp's __strcopy (estr, buf, -1=all).
+  // Stack: 4(A7)=size, 8(A7)=args, 8+size=fmt, 12+size=estr. After movem (16)
+  // the original offsets shift by 16.
+  StringF(a) {
+    a.movem_push(0x3030);                  // save d2,d3,a2,a3
+    a.movel_disp_d(20, A7, D0);            // size (orig 4(A7))
+    a.lea_disp(28, A7, A0); a.addal_d(D0, A0); a.movel_ind_d(A0, D3);  // D3 = estr
+    a.lea_disp(24, A7, A1);                // A1 = args
+    a.lea_disp(24, A7, A0); a.addal_d(D0, A0); a.movel_ind_d(A0, D1); a.movel_da(D1, A0); // A0 = fmt
+    a.link(A5, 256);
+    a.lea_disp(-256, A5, A3); a.movel_ad(A3, D2);   // D2 = buffer
+    a.lea_pc('_ifn_sf_put', A2);
+    a.movel_absw_a(4, A6); a.jsr_disp(-522, A6);    // RawDoFmt -> buffer
+    a.movel_dd(D2, D1);                    // D1 = buffer (str)
+    a.movel_dd(D3, D0);                    // D0 = estr
+    a.moveq(-1, D2);                       // D2 = len (-1 = all)
+    a.bsr('__strcopy');
+    a.unlk(A5);
+    a.movem_pop(0x0c0c);
+    a.rts();
+    a.label('_ifn_sf_put'); a.moveb_d_postinc(D0, A3); a.rts();
   },
 };

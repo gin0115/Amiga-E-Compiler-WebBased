@@ -54,10 +54,13 @@ const CASES = [
   ['StrLen', "EXPORT PROC f() IS StrLen('hello')", 'f()'],
   ['Bounds', 'EXPORT PROC f(v) IS Bounds(v,10,20)', 'f(99)'],
   ['New_Dispose', 'EXPORT PROC f()\n  DEF p\n  p:=New(16)\n  Dispose(p)\nENDPROC IF p THEN 1 ELSE 0', 'f()'],
+  // module prints via WriteF itself; main just calls it (void) — set 4th elem
+  ['WriteF', "EXPORT PROC f()\n  WriteF('a=\\d b=\\s c=\\d\\n', 42, 'mid', 99)\nENDPROC", 'f()', true],
+  ['StringF', "EXPORT PROC f()\n  DEF s[40]:STRING\n  StringF(s, 'x=\\d/\\d', 7, 3)\n  WriteF('\\s\\n', s)\nENDPROC", 'f()', true],
 ];
 
 let pass = 0, fail = 0;
-for (const [name, mod, callExpr] of CASES) {
+for (const [name, mod, callExpr, voidCall] of CASES) {
   const w = mkdtempSync(join(tmpdir(), `ifv-${name}-`));
   const modn = 'tm' + name.toLowerCase().replace(/[^a-z0-9]/g, '');  // unique per case
   // 1. EC builds the binary module
@@ -66,7 +69,8 @@ for (const [name, mod, callExpr] of CASES) {
     '--cwd', 'work:', 'bin:EC', `${modn}.e`]);
   if (!existsSync(join(w, `${modn}.m`))) { console.log(`SKIP ${name}: EC could not build module`); continue; }
 
-  const main = `MODULE '${modn}'\n\nPROC main()\n  WriteF('\\d\\n', ${callExpr})\nENDPROC\n`;
+  const body = voidCall ? `  ${callExpr}` : `  WriteF('\\d\\n', ${callExpr})`;
+  const main = `MODULE '${modn}'\n\nPROC main()\n${body}\nENDPROC\n`;
 
   // 2. oracle: EC links the module + runs (module must be on the emodules path)
   copyFileSync(join(w, `${modn}.m`), join(MODROOT, `${modn}.m`));
