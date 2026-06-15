@@ -11,7 +11,7 @@
 //
 // © Wouter van Oortmerssen 1991-1997, used with permission. Each thunk mirrors
 // the original routine; add more as modules require them.
-import { Asm, D0, D1, A0, A4, A7 } from './asm68k.js';
+import { Asm, D0, D1, A0, A4, A6, A7 } from './asm68k.js';
 const { MI, PL, EQ } = Asm.COND;
 
 // Generic marshaller: an ifunc whose behaviour ecomp already implements as a
@@ -129,4 +129,48 @@ export const IFUNC_THUNKS = {
   Plot: wrap('__plot', 3),
   Line: wrap('__line', 5),
   Box: wrap('__box', 5),
+
+  // ---- more verbatim ports from ec68kifuncs.asm ----
+  // I_VERSION (KickVersion): TRUE if running Kickstart >= requested version
+  KickVersion(a) {
+    a.movel_absw_a(4, A6); a.moveq(0, D1); a.movew_disp_d(20, A6, D1);
+    a.movel_disp_d(4, A7, D0); a.cmpl_dd(D0, D1); a.bcc(MI, '_ifn_kv1');
+    a.moveq(-1, D0); a.rts(); a.label('_ifn_kv1'); a.moveq(0, D0); a.rts();
+  },
+  // I_PUTLONG/PUTINT/PUTCHAR: store at (ptr)
+  PutLong(a) { a.movel_disp_a(8, A7, A0); a.movel_disp_d(4, A7, D0); a.movel_d_ind(D0, A0); a.rts(); },
+  PutInt(a) { a.movel_disp_a(8, A7, A0); a.movew_disp_d(6, A7, D0); a.movew_d_ind(D0, A0); a.rts(); },
+  PutChar(a) { a.movel_disp_a(8, A7, A0); a.moveb_disp_d(7, A7, D0); a.moveb_d_ind(D0, A0); a.rts(); },
+  // I_ABS: MOVE.L 4(A7),D0 / BPL .1 / NEG.L D0 / .1: RTS
+  Abs(a) { a.movel_disp_d(4, A7, D0); a.bcc(PL, '_ifn_abs1'); a.negl(D0); a.label('_ifn_abs1'); a.rts(); },
+  // I_NEXT: node.next is at -8(node)
+  Next(a) {
+    a.movel_disp_d(4, A7, D0); a.beq('_ifn_next1');
+    a.movel_da(D0, A0); a.movel_disp_d(-8, A0, D0); a.label('_ifn_next1'); a.rts();
+  },
+  // I_FORWARD: walk a list num steps (each node header is 8 bytes back)
+  Forward(a) {
+    a.lea_disp(8, A7, A0); a.movel_disp_d(4, A7, D1); a.addql(1, D1);
+    a.label('_ifn_fwd'); a.movel_ind_d(A0, D0); a.beq('_ifn_fwd1');
+    a.movel_da(D0, A0); a.subql_a(8, A0); a.subql(1, D1); a.bne('_ifn_fwd');
+    a.label('_ifn_fwd1'); a.rts();
+  },
+  // I_BOUNDS: clamp value (12(A7)) to [lower 8(A7), higher 4(A7)]
+  Bounds(a) {
+    a.movel_disp_d(12, A7, D0); a.movel_disp_d(4, A7, D1); a.cmpl_dd(D1, D0);
+    a.bcc(MI, '_ifn_bnd1'); a.movel_dd(D1, D0); a.bra('_ifn_bndx');
+    a.label('_ifn_bnd1'); a.movel_disp_d(8, A7, D1); a.cmpl_dd(D1, D0);
+    a.bcc(PL, '_ifn_bndx'); a.movel_dd(D1, D0); a.label('_ifn_bndx'); a.rts();
+  },
+  // I_EVAL: call a function pointer
+  Eval(a) { a.movel_disp_a(4, A7, A0); a.jsr_ind(A0); a.rts(); },
+  // I_EVEN / I_ODD: test low bit, return E boolean
+  Even(a) {
+    a.movel_disp_d(4, A7, D0); a.moveq(1, D1); a.andl_dd(D1, D0); a.beq('_ifn_even1');
+    a.moveq(0, D0); a.rts(); a.label('_ifn_even1'); a.moveq(-1, D0); a.rts();
+  },
+  Odd(a) {
+    a.movel_disp_d(4, A7, D0); a.moveq(1, D1); a.andl_dd(D1, D0); a.bne('_ifn_odd1');
+    a.moveq(0, D0); a.rts(); a.label('_ifn_odd1'); a.moveq(-1, D0); a.rts();
+  },
 };
