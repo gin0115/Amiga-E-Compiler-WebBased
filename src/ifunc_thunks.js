@@ -102,8 +102,9 @@ export const IFUNC_THUNKS = {
   Not(a) { a.movel_disp_d(4, A7, D0); a.notl(D0); a.rts(); },
   // I_ESTRMAX (StrMax): A0=4(A7); D0=0; MOVE.W -4(A0),D0; RTS
   StrMax(a) { a.movel_disp_a(4, A7, A0); a.moveq(0, D0); a.movew_disp_d(-4, A0, D0); a.rts(); },
-  // I_LISTLEN: A0=4(A7); D0=0; MOVE.W -2(A0),D0; RTS
+  // I_LISTLEN / I_LISTMAX: list length at -2(list), max at -4(list)
   ListLen(a) { a.movel_disp_a(4, A7, A0); a.moveq(0, D0); a.movew_disp_d(-2, A0, D0); a.rts(); },
+  ListMax(a) { a.movel_disp_a(4, A7, A0); a.moveq(0, D0); a.movew_disp_d(-4, A0, D0); a.rts(); },
   // I_LISTITEM: D0=4(A7); LSL.L #2,D0; A0=8(A7); D0=(A0+D0); RTS
   ListItem(a) {
     a.movel_disp_d(4, A7, D0); a.asll_imm(2, D0);
@@ -231,4 +232,45 @@ export const IFUNC_THUNKS = {
     a.rts();
     a.label('_ifn_sf_put'); a.moveb_d_postinc(D0, A3); a.rts();
   },
+
+  // ---- pool allocators: String()/List()/DisposeLink()/FastDisposeList ----
+  // 1-for-1 with ec68kifuncs.asm, using ecomp's __estrpool slot (= EC's
+  // -120(A4)) + exec AllocPooled(-708)/FreePooled(-714). 12-byte block header
+  // [allocsize.l][link.l][maxlen.w len.w]; data follows, so estring -4=maxlen,
+  // -2=len matches ecomp's own estrings.
+  String(a, cg) {
+    const pool = cg.globalSlot('__estrpool');
+    a.movel_disp_d(4, A7, D0); a.addql(8, D0); a.addql(8, D0);   // size+16
+    a.moveq(-4, D1); a.andl_dd(D1, D0);                          // round to *4
+    a.movel_d_push(D0);
+    a.movel_disp_a(pool, A4, A0); a.movel_absw_a(4, A6); a.jsr_disp(-708, A6);  // AllocPooled
+    a.movel_pop_d(D1); a.tstl(D0); a.beq('_ifn_str_d');
+    a.movel_da(D0, A0); a.movel_d_ind(D1, A0); a.clrl_disp(4, A0);
+    a.movel_disp_d(4, A7, D1); a.swap(D1); a.movel_d_disp(D1, 8, A0);   // maxlen<<16
+    a.lea_disp(12, A0, A0); a.movel_ad(A0, D0);
+    a.label('_ifn_str_d'); a.rts();
+  },
+  List(a, cg) {
+    const pool = cg.globalSlot('__estrpool');
+    a.movel_disp_d(4, A7, D0); a.asll_imm(2, D0); a.addql(8, D0); a.addql(4, D0);  // num*4+12
+    a.movel_d_push(D0);
+    a.movel_disp_a(pool, A4, A0); a.movel_absw_a(4, A6); a.jsr_disp(-708, A6);
+    a.movel_pop_d(D1); a.tstl(D0); a.beq('_ifn_lst_d');
+    a.movel_da(D0, A0); a.movel_d_ind(D1, A0); a.clrl_disp(4, A0);
+    a.movel_disp_d(4, A7, D1); a.swap(D1); a.movel_d_disp(D1, 8, A0);   // maxitems<<16
+    a.lea_disp(12, A0, A0); a.movel_ad(A0, D0);
+    a.label('_ifn_lst_d'); a.rts();
+  },
+  // DisposeLink: free a chain of pool blocks linked through -8(data)
+  DisposeLink(a, cg) {
+    const pool = cg.globalSlot('__estrpool');
+    a.movel_disp_a(4, A7, A3);
+    a.label('_ifn_dl'); a.movel_ad(A3, D0); a.beq('_ifn_dl_done');
+    a.lea_disp(-12, A3, A1); a.movel_disp_a(-8, A3, A3);
+    a.movel_disp_a(pool, A4, A0); a.movel_ind_d(A1, D0);
+    a.movel_absw_a(4, A6); a.jsr_disp(-714, A6);                 // FreePooled
+    a.bra('_ifn_dl'); a.label('_ifn_dl_done'); a.rts();
+  },
+  // FastDisposeList: FastNew lists live in the heap chain (FastNew -> __new)
+  FastDisposeList(a) { a.movel_disp_d(4, A7, D0); a.bsr('__dispose'); a.rts(); },
 };

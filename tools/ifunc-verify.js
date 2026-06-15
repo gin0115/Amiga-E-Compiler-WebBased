@@ -57,6 +57,9 @@ const CASES = [
   // module prints via WriteF itself; main just calls it (void) — set 4th elem
   ['WriteF', "EXPORT PROC f()\n  WriteF('a=\\d b=\\s c=\\d\\n', 42, 'mid', 99)\nENDPROC", 'f()', true],
   ['StringF', "EXPORT PROC f()\n  DEF s[40]:STRING\n  StringF(s, 'x=\\d/\\d', 7, 3)\n  WriteF('\\s\\n', s)\nENDPROC", 'f()', true],
+  ['String', "EXPORT PROC f()\n  DEF s\n  s:=String(20)\n  StrCopy(s,'pooled')\n  WriteF('\\s/\\d\\n', s, StrMax(s))\nENDPROC", 'f()', true],
+  ['DisposeLink', "EXPORT PROC f()\n  DEF s\n  s:=String(10)\n  StrCopy(s,'hi')\n  DisposeLink(s)\nENDPROC IF s THEN 1 ELSE 0", 'f()'],
+  ['List', "EXPORT PROC f()\n  DEF l\n  l:=List(5)\n  WriteF('lmax=\\d\\n', ListMax(l))\nENDPROC", 'f()', true],
 ];
 
 let pass = 0, fail = 0;

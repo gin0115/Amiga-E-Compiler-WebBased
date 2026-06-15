@@ -154,7 +154,7 @@ export class Codegen {
       if (a.labels.has(label)) continue;
       a.align();
       a.label(label);
-      IFUNC_THUNKS[name](a);
+      IFUNC_THUNKS[name](a, this);     // some thunks need globalSlot (e.g. the pool)
     }
 
     // 2. append each module's code, resolve its procs, fix up its relocations.
@@ -261,6 +261,18 @@ export class Codegen {
       a.movel_disp_d(scratch + 8, A4, D1);
       a.eorl_dd(D1, D0);
       a.movel_d_disp(D0, seedSlot, A4);
+    }
+    {
+      // exec memory pool for the String()/List()/DisposeLink() intrinsics that
+      // linked binary modules call (EC keeps this at -120(A4); CreatePool(NIL,
+      // 4096, 256) matches the original runtime).
+      const pool = this.globalSlot('__estrpool');
+      a.moveq(0, D0);
+      a.movel_imm(4096, D1);
+      a.movel_imm(256, D2);
+      a.movel_absw_a(4, A6);
+      a.jsr_disp(-696, A6);              // CreatePool
+      a.movel_d_disp(D0, pool, A4);
     }
     for (const gi of this.globalInits) {
       if (gi.kind === 'STRING') {
