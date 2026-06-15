@@ -148,7 +148,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 ## tools (32)
 
 - [ ] `RUN?  ` tools/Boopsi
-- [ ] `RUN?  ` tools/EasyGUI
+- [ ] `NOTE  ` tools/EasyGUI — list codegen verified IDENTICAL to EC; GUI renders fine when EC-built (screenshot). ecomp raises EasyGUI "Egui" check at runtime — a linking divergence reachable only on real Kickstart (vamos faults at LIB before the check). Needs live-site debug.
 - [ ] `RUN?  ` tools/EasyGUI_debug
 - [ ] `RUN?  ` tools/EasyGUI_lite
 - [ ] `RUN?  ` tools/EasyGUI_notag
