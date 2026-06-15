@@ -93,6 +93,25 @@ EXPORT PROC val() OF counter IS self.n`,
   WriteF('a=\\d b=\\d\\n', a.val(), b.val())
   END a
   END b`],
+
+  // constructor method NOT named after the class (oomodules use new()/init()) —
+  // NEW must dispatch the method actually named in `NEW obj.method()`, not a
+  // method that merely matches the class name.
+  ['named_ctor',
+   `OPT MODULE
+EXPORT OBJECT point
+  x:LONG
+  y:LONG
+ENDOBJECT
+EXPORT PROC make(a,b) OF point
+  self.x := a
+  self.y := b
+ENDPROC
+EXPORT PROC sum() OF point IS self.x+self.y`,
+   `  DEF p=NIL:PTR TO point
+  NEW p.make(10,20)
+  WriteF('sum=\\d\\n', p.sum())
+  END p`],
 ];
 
 let pass = 0, fail = 0;
