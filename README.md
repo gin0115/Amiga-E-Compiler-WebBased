@@ -158,6 +158,39 @@ Everything in the E v3.3a manual, including the famous corners:
   auto-free at exit
 - 100+ builtins, the dos/exec call surface, `CleanUp`, `CtrlC`, `Rnd`…
 
+## Linking precompiled binary modules (EasyGUI, afc/*, oomodules/*, …)
+
+ecomp doesn't just read a module's *interface* — it **links the actual 68K
+code** out of the shipped binary `.m` files into your executable, the same
+way the original `ec` does. Importing `tools/EasyGUI`, `afc/Parser`,
+`oomodules/*` etc. pulls their compiled procedures straight in, no source
+required. This is a small linker on top of the code generator:
+
+- **Code + relocations** — each module's `CODE` blob is appended and its
+  `RELOC`s applied (internal pointers rebased into `HUNK_RELOC32`; the
+  placeholder `jsr abs.l` ifunc sites patched to `bsr.l` into the runtime).
+- **The E runtime intrinsics** the modules call (`WriteF`, `String`, `Mod`,
+  `RealF`, `SetColour`, …) are emitted as thunks ported **1-for-1** from
+  the original `ec68kifuncs` source and **run-verified byte-identical to
+  `ec`** under emulation (`tools/ifunc-verify.js`, 29/29).
+- **The ABI matches `ec`.** Precompiled modules bake in `ec`'s fixed
+  negative-`A4` offsets for the standard runtime globals (`dosbase` at
+  `-44`, `stdout` at `-8`, …), so ecomp lays out `A4` to match — a module
+  calling `dos.ReadArgs` finds its base exactly where `ec` put it.
+- **OOP across the boundary** — classes from binary modules dispatch through
+  their runtime vtable (the per-class "descriptor" the module builds itself):
+  `NEW obj.class()` builds the descriptor, allocates, and calls the
+  constructor; `obj.method()` dispatches via the slot; `END obj` runs the
+  destructor and frees. Reverse-engineered from real `ec` output and written
+  up in `docs/oop-dispatch.md`.
+
+148 of the 149 shipped binary code modules link; the lone holdout
+(`tools/lisp`) needs a conservative mark-sweep GC that assumes `ec`'s
+stack-allocated globals — incompatible with ecomp's static-globals model.
+
+`tools/oop-corpus.js` and `tools/lib-bakeoff.js` tabulate module linking
+against the real `ec` oracle.
+
 ## Testing
 
 ```sh
