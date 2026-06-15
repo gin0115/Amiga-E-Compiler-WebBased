@@ -123,6 +123,26 @@ export class Codegen {
     return writeHunk(code, a.relocs);
   }
 
+  // Classify a module's external-global base name: library (OpenLibrary),
+  // resource (OpenResource), or null (E-runtime global / module-internal data,
+  // bound to its own A4 slot). libname = strip 'base' + '.library' with a few
+  // irregular overrides.
+  static moduleOpenInfo(base) {
+    const RESOURCE = {
+      battclockbase: 'battclock.resource', battmembase: 'battmem.resource',
+      diskbase: 'disk.resource', miscbase: 'misc.resource', potgobase: 'potgo.resource',
+      cardresbase: 'card.resource', filesysresbase: 'FileSystem.resource',
+    };
+    const LIBOVERRIDE = {
+      rexxsysbase: 'rexxsyslib.library', cxbase: 'commodities.library',
+      gfxbase: 'graphics.library', sysbase: 'exec.library', execbase: 'exec.library',
+    };
+    if (RESOURCE[base]) return { kind: 'resource', name: RESOURCE[base] };
+    if (LIBOVERRIDE[base]) return { kind: 'lib', name: LIBOVERRIDE[base] };
+    if (/base$/.test(base)) return { kind: 'lib', name: base.replace(/base$/, '') + '.library' };
+    return null;   // ctrlc, sin_table, *count, catalogList … bound to own slot
+  }
+
   // Link binary code modules: append each module's CODE blob, resolve its
   // exported PROCs to labels inside it, emit the runtime intrinsic (ifunc)
   // thunks it calls, and fix up its relocations.
@@ -190,10 +210,16 @@ export class Codegen {
           a.bsr32At(base + r.offset, `ifunc_${norm(ifuncName(r.ifuncNum))}`);
         }
       }
-      if (m.globs && m.globs.xrefs.length) {
-        this.err({ line: 0 }, `module '${m.name}': external globals (${
-          m.globs.xrefs.map(x => x.name).join(', ')}) not yet supported`);
-        return;
+      // bind external-global refs: patch each A4-relative displacement to the
+      // shared slot for that symbol (library/resource base opened at startup,
+      // or a runtime/data slot).
+      for (const x of m.globs?.xrefs ?? []) {
+        const slot = this.globalSlot(x.name);
+        for (const off of x.refs) {
+          const at = base + off;
+          a.bytes[at] = (slot >> 8) & 0xff;
+          a.bytes[at + 1] = slot & 0xff;
+        }
       }
     }
   }
@@ -301,9 +327,42 @@ export class Codegen {
       a.jsr_disp(-552, A6);            // OpenLibrary
       a.movel_d_disp(D0, this.globalSlot(base), A4);
     }
+    // Open the libraries/resources that linked binary modules reference as
+    // external globals (GLOBS xrefs). Bases already auto-opened are skipped.
+    this.openedLibSlots = [];
+    {
+      const autoBases = new Set(['intuitionbase', 'gfxbase', '__mathbase', '__mathtrans']);
+      const seen = new Set();
+      for (const m of this.sem.binaryModules ?? []) {
+        for (const x of m.globs?.xrefs ?? []) {
+          const info = Codegen.moduleOpenInfo(x.name);
+          if (!info || autoBases.has(x.name) || seen.has(x.name)) continue;
+          seen.add(x.name);
+          const slot = this.globalSlot(x.name);
+          a.movel_absw_a(4, A6);
+          a.lea_pc(this.strLabel(info.name), A1);
+          if (info.kind === 'resource') {
+            a.jsr_disp(-498, A6);        // OpenResource(A1)
+          } else {
+            a.moveq(0, D0);
+            a.jsr_disp(-552, A6);        // OpenLibrary(A1, 0)
+            this.openedLibSlots.push(slot);
+          }
+          a.movel_d_disp(D0, slot, A4);
+        }
+      }
+    }
     a.bsr('proc_main');
     a.label('__exit');                 // CleanUp() lands here with SP restored
     a.bsr('__freeall');                // release NEW/New/String allocations
+    for (const slot of this.openedLibSlots ?? []) {   // close module libraries
+      a.movel_disp_a(slot, A4, A1);
+      a.tstl_disp(slot, A4);
+      a.beq(`__skipclose_${slot}`);
+      a.movel_absw_a(4, A6);
+      a.jsr_disp(-414, A6);            // CloseLibrary
+      a.label(`__skipclose_${slot}`);
+    }
     a.movel_disp_a(4, A4, A1);         // dosbase -> a1... via address reg
     a.movel_absw_a(4, A6);
     a.jsr_disp(-414, A6);              // CloseLibrary
