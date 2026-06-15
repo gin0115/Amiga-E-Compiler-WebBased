@@ -64,6 +64,9 @@ const CASES = [
   ['SetList', "EXPORT PROC f()\n  DEF a[5]:LIST\n  SetList(a,3)\n  WriteF('\\d\\n', ListLen(a))\nENDPROC", 'f()', true],
   ['ListAdd', "EXPORT PROC f()\n  DEF a[5]:LIST\n  ListAdd(a,[7,8,9])\n  WriteF('\\d,\\d,\\d/\\d\\n', a[0],a[1],a[2],ListLen(a))\nENDPROC", 'f()', true],
   ['ListCopy', "EXPORT PROC f()\n  DEF a[5]:LIST,b[5]:LIST\n  ListAdd(a,[1,2])\n  ListCopy(b,a)\n  WriteF('\\d,\\d/\\d\\n', b[0],b[1],ListLen(b))\nENDPROC", 'f()', true],
+  ['Mod', 'EXPORT PROC f(a,b) IS Mod(a,b)', 'f(17,5)'],
+  ['CtrlC', 'EXPORT PROC f() IS CtrlC()', 'f()'],
+  ['AstrCopy', "EXPORT PROC f()\n  DEF s[20]:STRING\n  AstrCopy(s,'hello',20)\n  WriteF('\\s/\\d\\n', s, StrLen(s))\nENDPROC", 'f()', true],
 ];
 
 let pass = 0, fail = 0;

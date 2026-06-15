@@ -115,7 +115,10 @@ export class Asm {
   // 68020 32x32->32 long mul/div (used by ported EC intrinsic thunks I_MUL/I_DIV)
   mulsl_dd(src, dst) { this.w16(0x4c00 | src); this.w16(0x0800 | dst << 12); }  // muls.l Ds,Dd
   divsl_dd(src, dst) { this.w16(0x4c40 | src); this.w16(0x0800 | dst << 12); }  // divs.l Ds,Dd
+  btst_imm_d(bit, dn) { this.w16(0x0800 | dn); this.w16(bit & 0x1f); }  // btst #i,Dn
+  clrb_predec(an) { this.w16(0x4220 | an); }                            // clr.b -(An)
   cmpib_imm(imm, dn) { this.w16(0x0c00 | dn); this.w16(imm & 0xff); }   // cmpi.b #i,Dn
+  cmpiw_imm(imm, dn) { this.w16(0x0c40 | dn); this.w16(imm & 0xffff); } // cmpi.w #i,Dn
   addib_imm(imm, dn) { this.w16(0x0600 | dn); this.w16(imm & 0xff); }   // addi.b #i,Dn
   movew_d_push(dn) { this.w16(0x3f00 | dn); }                           // move.w Dn,-(a7)
   movew_pop_d(dn) { this.w16(0x301f | dn << 9); }                       // move.w (a7)+,Dn

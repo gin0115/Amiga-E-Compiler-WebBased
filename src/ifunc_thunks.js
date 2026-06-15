@@ -348,4 +348,60 @@ export const IFUNC_THUNKS = {
     a.label('_ifn_la_l'); a.movel_postinc_postinc(A0, A1); a.dbra(D0, '_ifn_la_l');
     a.label('_ifn_la3'); a.movel_ad(A2, D0); a.rts();
   },
+
+  // ---- more intrinsics, ported 1-for-1 from ec68kifuncs.asm ----
+
+  // I_MOD: a MOD b — 020 signed long divide; divsl_dd leaves the remainder in
+  // D0 (Dr=0), quotient in D1, so D0 = a mod b (matches ec68kifuncs LS version)
+  Mod(a) {
+    a.movel_disp_d(8, A7, D1); a.movel_disp_d(4, A7, D0);
+    a.divsl_dd(D0, D1); a.rts();               // D1=a/b, D0=a mod b
+  },
+  // I_LINK: link a node's -8 field to another (list cell back-pointer)
+  Link(a) {
+    a.movel_disp_a(8, A7, A0); a.movel_ad(A0, D0); a.beq('_ifn_link_1');
+    a.movel_disp_d(4, A7, D1); a.movel_d_disp(D1, -8, A0);
+    a.label('_ifn_link_1'); a.rts();          // D0 = node
+  },
+  // I_ASTRCOPY: bounded string copy (maxlen at 6(A7) word; src 8, dest 12)
+  AstrCopy(a) {
+    a.moveq(0, D0); a.movew_disp_d(6, A7, D0); a.beq('_ifn_asc_x2');
+    a.movel_disp_a(8, A7, A1); a.movel_disp_a(12, A7, A0); a.addql(1, D0);
+    a.label('_ifn_asc_al'); a.subql(1, D0); a.beq('_ifn_asc_x');
+    a.moveb_ind_postinc(A1, A0); a.bne('_ifn_asc_al'); a.bra('_ifn_asc_x2');
+    a.label('_ifn_asc_x'); a.clrb_predec(A0);
+    a.label('_ifn_asc_x2'); a.rts();
+  },
+  // I_CTRLC: test (and clear) the Ctrl-C break signal via exec SetSignal(-306)
+  CtrlC(a) {
+    a.moveq(0, D0); a.moveq(0, D1); a.movel_absw_a(4, A6); a.jsr_disp(-306, A6);
+    a.btst_imm_d(12, D0); a.beq('_ifn_cc_1');
+    a.moveq(0, D0); a.movel_imm(4096, D1); a.jsr_disp(-306, A6);
+    a.moveq(-1, D0); a.rts();
+    a.label('_ifn_cc_1'); a.moveq(0, D0); a.rts();
+  },
+  // float ops: mathieeesingbas (base at -56(A4)) / mathieeesingtrans (-60(A4))
+  Ffloor(a) { a.movel_disp_d(4, A7, D0); a.movel_disp_a(-56, A4, A6); a.jsr_disp(-90, A6); a.rts(); },
+  Fceil(a)  { a.movel_disp_d(4, A7, D0); a.movel_disp_a(-56, A4, A6); a.jsr_disp(-96, A6); a.rts(); },
+  Fsin(a)   { a.movel_disp_d(4, A7, D0); a.movel_disp_a(-60, A4, A6); a.jsr_disp(-36, A6); a.rts(); },
+  Fcos(a)   { a.movel_disp_d(4, A7, D0); a.movel_disp_a(-60, A4, A6); a.jsr_disp(-42, A6); a.rts(); },
+
+  // I_SETCOLOUR: gfx SetRGB4 (pre-V39) or SetRGB32 (V39+) via gfxbase (-52(A4)),
+  // selecting on the exec library version. 1-for-1 with ec68kifuncs.asm.
+  SetColour(a) {
+    a.movel_da(D3, A3); a.movel_da(D4, A2);          // save D3,D4
+    a.movel_disp_d(4, A7, D3); a.movel_disp_d(8, A7, D2);
+    a.movel_disp_d(12, A7, D1); a.movel_disp_d(16, A7, D0);
+    a.movel_disp_a(20, A7, A0); a.addal_imm(44, A0);
+    a.movel_absw_a(4, A6); a.movew_disp_d(20, A6, D4); // D4 = exec LIB_VERSION
+    a.movel_disp_a(-52, A4, A6);                       // gfxbase
+    a.cmpiw_imm(39, D4); a.bcc(PL, '_ifn_sc_39');
+    a.lsrl_imm(4, D1); a.lsrl_imm(4, D2); a.lsrl_imm(4, D3);
+    a.jsr_disp(-0x120, A6);                            // SetRGB4
+    a.movel_ad(A3, D3); a.movel_ad(A2, D4); a.rts();
+    a.label('_ifn_sc_39'); a.moveq(24, D4);
+    a.asll_d(D4, D1); a.asll_d(D4, D2); a.asll_d(D4, D3);
+    a.jsr_disp(-852, A6);                              // SetRGB32
+    a.movel_ad(A3, D3); a.movel_ad(A2, D4); a.rts();
+  },
 };

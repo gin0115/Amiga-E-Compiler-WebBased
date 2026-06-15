@@ -54,6 +54,7 @@ export class Codegen {
       ['stdout', -8], ['__stdout', -8], ['conout', -12], ['stdrast', -16],
       ['arg', -32], ['wbmessage', -36], ['execbase', -40],
       ['dosbase', -44], ['__dosbase', -44], ['intuitionbase', -48], ['gfxbase', -52],
+      ['__mathbase', -56], ['__mathtrans', -60],
       ['exception', -84], ['stdin', -92], ['exceptioninfo', -96],
       // ecomp-internal runtime slots (positive side of A4; offsets unchanged
       // from before the ABI alignment so existing fixed references still hold)
@@ -122,6 +123,14 @@ export class Codegen {
     // are used (singbas is ROM-resident and cheap, opened always)
     this.usesTrans = /"name":"F(sin|cos|tan|exp|log|log10|pow|sqrt|atan|asin|acos)"/
       .test(JSON.stringify(program));
+    // a linked binary module may itself call a transcendental intrinsic
+    // (Fsin/Fcos/…) — open mathieeesingtrans for it too
+    const TRANS = /^F(sin|cos|tan|exp|log|log10|pow|sqrt|atan|asin|acos|sincos)$/;
+    for (const m of this.sem.binaryModules ?? []) {
+      for (const r of m.relocs ?? []) {
+        if (r.kind === 'ifunc' && TRANS.test(ifuncName(r.ifuncNum) ?? '')) this.usesTrans = true;
+      }
+    }
     this.emitStartup();
     this.emitRuntime();
     for (const p of program.procs) this.emitProc(p);
