@@ -1998,8 +1998,13 @@ export class Codegen {
         a.movel_da(D0, A0);
         a.movel_disp_d(this.binaryClassGlobals(bcls).ptrSlot, A4, D1);
         a.movel_d_ind(D1, A0);                   // instance[0] = descriptor ptr
-        if (bcls.ctorSlot != null)
-          this.emitBinaryMethodCall(bcls, bcls.ctorSlot, objExp, lval.args, ctx);
+        // the constructor is the method NAMED in `NEW obj.method(...)` (often
+        // the class name, but `new`/`init`/… for the oomodules) — not whatever
+        // merely matches the class name.
+        const ctorM = bcls.methods.get(lval.callee.name) ??
+          (bcls.ctorSlot != null ? { slot: bcls.ctorSlot } : null);
+        if (ctorM) this.emitBinaryMethodCall(bcls, ctorM.slot, objExp, lval.args, ctx);
+        else this.err(node, `no constructor ${lval.callee.name} on ${bcls.name}`);
         this.exp(objExp, ctx);                   // expression value is the object
         return;
       }
