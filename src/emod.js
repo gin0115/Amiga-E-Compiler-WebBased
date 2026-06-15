@@ -40,6 +40,7 @@ export function readEmod(buf, name = '<module>') {
     relocs: [],                         // {offset, kind:'abs'|'ifunc', ifuncNum}
     globs: { xrefs: [], drels: [] },    // xrefs:{name,refs[]}  drels:{refs[]}
     globalsCount: 0,
+    methods: [],                        // {object, name, offset, args} for class methods
     isCodeModule: false,
     partial: false, error: null,
   };
@@ -110,19 +111,35 @@ export function readEmod(buf, name = '<module>') {
           }
         }
         const size = uw();
-        out.objects.set(oname, { name: oname, members, size, privates });
+        const objrec = { name: oname, members, size, privates, methods: [], delcode: null };
+        out.objects.set(oname, objrec);
         if (out.version >= 7) {
-          // optional method table — skip it (we don't model methods)
-          if (uw()) {
-            o += 4;
-            let ml = uw(); o += ml + 4;
-            while (sw() !== -1) {
-              o += 2;
-              ml = uw(); o += ml;
-              uw();                              // arg count (no displacement)
-              ml = uw(); o += ml * 4;
+          // v7+ class trailer (EC WRITEMODULE format). DELSIZE word; if nonzero
+          // the object is a class with a destructor + method table:
+          //   DELCODE.l, SUPERASCLEN.w, ODELOFF.w, ODESTR.w
+          //   per method: [TYP.b FL.b][OFF.w][ASCLEN.w][name padded]
+          //               [NARGS.w][NDEF.w][default.l * NDEF]   (M_OFF = OFF)
+          //   methods end on a TYP+FL word == -1
+          //   OACC list: [TYP.w][CODE.l]* end on a TYP word == -1
+          const delsize = uw();
+          if (delsize) {
+            objrec.delsize = delsize;
+            objrec.delcode = l();              // destructor code offset
+            uw(); uw(); uw();                  // SUPERASCLEN, ODELOFF, ODESTR
+            for (;;) {
+              const tf = uw();
+              if (tf === 0xffff) break;
+              const moff = uw();               // M_OFF: method code offset
+              const asclen = uw();
+              const mname = str(asclen);
+              const nargs = uw();
+              const ndef = uw();
+              o += ndef * 4;
+              objrec.methods.push({ name: mname, offset: moff, args: nargs,
+                kind: tf & 0xff });
+              out.methods.push({ object: oname, name: mname, offset: moff, args: nargs });
             }
-            while (sw() !== -1) o += 4;
+            for (;;) { if (uw() === 0xffff) break; l(); }   // OACC list
           }
         }
       } else if (job === 3) {                    // JOB_CODE
