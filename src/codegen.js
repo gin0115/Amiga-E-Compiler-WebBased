@@ -188,6 +188,14 @@ export class Codegen {
           if (!a.labels.has(label)) a.labelAt(label, base + p.offset);
         }
       }
+      // class descriptor-builders live inside the module code at `delcode`
+      // (PC-relative LEAs, so no relocs) — label them for NEW to call.
+      for (const cls of this.sem.binaryClasses?.values() ?? []) {
+        if (cls.module === m.name && cls.delcode != null) {
+          const label = `moddescr_${cls.name}`;
+          if (!a.labels.has(label)) a.labelAt(label, base + cls.delcode);
+        }
+      }
       for (const r of m.relocs) {
         if (r.kind === 'abs') {
           // rebase the absolute longword (a module-internal code/data pointer)
@@ -1823,6 +1831,27 @@ export class Codegen {
         for (const t of s.targets) {
           const v = t.kind === 'Index' ? t.obj : t;   // END p[10] frees via p
           if (v.kind !== 'Var') { this.err(s, 'END on plain variables only'); continue; }
+          // binary-module class: dispatch the destructor through the vtable
+          // (odestr slot) when non-NIL, then free — see docs/oop-dispatch.md
+          const bcls = this.binaryClassOf(v, ctx);
+          if (bcls) {
+            // odestr is the destructor's vtable slot, or 0xffff when the class
+            // has none (then END just frees the instance).
+            if (bcls.odestr && bcls.odestr !== 0xffff) {
+              this.loadVar(v.name, ctx, s);            // D0 = instance
+              const skip = this.uniq('endnil');
+              a.tstl(D0); a.beq(skip);
+              a.movel_da(D0, A0);                      // self in A0
+              a.movel_disp_a(0, A0, A1);               // descriptor
+              a.movel_disp_a(bcls.odestr, A1, A1);     // descriptor[odestr] = dtor
+              a.jsr_ind(A1);
+              a.label(skip);
+            }
+            this.loadVar(v.name, ctx, s);
+            a.bsr('__dispose');
+            this.storeVar(v.name, ctx, s);
+            continue;
+          }
           // ch_14: END runs the object's end() destructor when it has one
           const vt = this.typeOf(v, ctx);
           let objName = vt?.base === 'PTR' ? vt.to?.name : null;
@@ -1878,12 +1907,78 @@ export class Codegen {
     a.movel_ad(A0, D0);
   }
 
+  // ---------- binary-module class (vtable) dispatch — see docs/oop-dispatch.md
+  // A class from a binary .m dispatches through a runtime "descriptor" (vtable)
+  // built by the module's own code; self is passed in A0, args on the stack.
+
+  // The binary class for an expression's static type, or null (source classes
+  // and non-objects fall through to the existing static dispatch).
+  binaryClassOf(exp, ctx) {
+    const t = this.typeOf(exp, ctx);
+    const name = t?.base === 'PTR' ? t.to?.name : t?.name;
+    return name ? (this.sem.binaryClasses?.get(name) ?? null) : null;
+  }
+
+  // Lazily reserve globals for a class's descriptor: a pointer slot + the
+  // descriptor region itself (delsize bytes). Returns {ptrSlot, region}.
+  binaryClassGlobals(cls) {
+    this._bcGlobals = this._bcGlobals ?? new Map();
+    let g = this._bcGlobals.get(cls.name);
+    if (g) return g;
+    const ptrSlot = this.globalSlot(`__descrptr_${cls.name}`);
+    const region = this.globalSize;
+    this.globalSize += (cls.delsize + 1) & ~1;
+    g = { ptrSlot, region };
+    this._bcGlobals.set(cls.name, g);
+    return g;
+  }
+
+  // Build the descriptor into its globals region by calling the module's own
+  // builder (at moddescr_<class> = modbase+delcode), and stash the pointer.
+  // Idempotent — EC (re)builds at each NEW.
+  buildDescriptor(cls) {
+    const a = this.a;
+    const g = this.binaryClassGlobals(cls);
+    a.lea_disp(g.region, A4, A0);            // A0 = &descriptor region
+    a.movel_a_disp(A0, g.ptrSlot, A4);       // remember the descriptor pointer
+    a.jsr_abs(`moddescr_${cls.name}`);       // builder fills [A0]: size + methods
+  }
+
+  // obj.method(args): push args (left-to-right, same as binary procs), load
+  // self into A0, then `(A0)->A1; (slot,A1)->A1; jsr (A1)`. Result in D0.
+  emitBinaryMethodCall(cls, slot, objExp, args, ctx) {
+    const a = this.a;
+    for (const arg of args) { this.exp(arg, ctx); a.movel_d_push(D0); }
+    this.exp(objExp, ctx);                   // instance ptr -> D0
+    a.movel_da(D0, A0);                      // self in A0
+    a.movel_disp_a(0, A0, A1);               // A1 = descriptor = (A0)
+    a.movel_disp_a(slot, A1, A1);            // A1 = descriptor[slot] = method
+    a.jsr_ind(A1);
+    const pop = 4 * args.length;
+    if (pop) { if (pop <= 8) a.addql_a(pop, A7); else a.addal_imm(pop, A7); }
+  }
+
   // NEW p / NEW p[n] — allocate zeroed memory sized from p's pointer type
   genNew(lval, ctx, node) {
     const a = this.a;
     // constructor form: NEW a.create(args) — allocate, then call the method
     if (lval.kind === 'Call' && lval.callee.kind === 'Member') {
       const objExp = lval.callee.obj;
+      const bcls = this.binaryClassOf(objExp, ctx);
+      if (bcls) {
+        // binary-module class: build vtable, alloc OSIZE, set instance[0] =
+        // descriptor, then dispatch the constructor through the vtable.
+        this.buildDescriptor(bcls);
+        this.genNew(objExp, ctx, node);          // alloc OSIZE + store to objExp
+        this.exp(objExp, ctx);                   // D0 = instance
+        a.movel_da(D0, A0);
+        a.movel_disp_d(this.binaryClassGlobals(bcls).ptrSlot, A4, D1);
+        a.movel_d_ind(D1, A0);                   // instance[0] = descriptor ptr
+        if (bcls.ctorSlot != null)
+          this.emitBinaryMethodCall(bcls, bcls.ctorSlot, objExp, lval.args, ctx);
+        this.exp(objExp, ctx);                   // expression value is the object
+        return;
+      }
       this.genNew(objExp, ctx, node);
       this.call({ kind: 'Call', callee: lval.callee, args: lval.args }, ctx);
       this.exp(objExp, ctx);            // expression value is the object
@@ -2799,6 +2894,14 @@ export class Codegen {
       return;
     }
     if (callee.kind === 'Member') {
+      // binary-module class: dispatch through the runtime vtable (self in A0)
+      const bcls = this.binaryClassOf(callee.obj, ctx);
+      if (bcls) {
+        const m = bcls.methods.get(callee.name);
+        if (!m) { this.err(e, `unknown method ${callee.name} on ${bcls.name}`); return; }
+        this.emitBinaryMethodCall(bcls, m.slot, callee.obj, e.args, ctx);
+        return;
+      }
       // method call o.m(args): static dispatch on the declared type,
       // walking the inheritance chain; self is the hidden first argument
       const ot = this.typeOf(callee.obj, ctx);

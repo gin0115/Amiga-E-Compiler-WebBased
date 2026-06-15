@@ -115,29 +115,42 @@ export function readEmod(buf, name = '<module>') {
         out.objects.set(oname, objrec);
         if (out.version >= 7) {
           // v7+ class trailer (EC WRITEMODULE format). DELSIZE word; if nonzero
-          // the object is a class with a destructor + method table:
+          // the object is a class with a method table (vtable). Verified by
+          // instruction-tracing real EC output (NEW/dispatch/END), see
+          // docs/oop-dispatch.md:
           //   DELCODE.l, SUPERASCLEN.w, ODELOFF.w, ODESTR.w
-          //   per method: [TYP.b FL.b][OFF.w][ASCLEN.w][name padded]
-          //               [NARGS.w][NDEF.w][default.l * NDEF]   (M_OFF = OFF)
+          //   per method: [TYP.b FL.b][M_OFF.w][ASCLEN.w][name padded]
+          //               [NARGS.w][NDEF.w][default.l * NDEF]
           //   methods end on a TYP+FL word == -1
           //   OACC list: [TYP.w][CODE.l]* end on a TYP word == -1
+          //
+          // The runtime model: a per-class "descriptor" (vtable) of `delsize`
+          // bytes is built by calling the module's own code at `delcode` (the
+          // builder uses PC-relative LEAs, so no relocs). Layout:
+          //   descriptor[0]   = OSIZE (instance byte size = objrec.size)
+          //   descriptor[M_OFF] = method code pointer   (M_OFF = 4,8,12,…)
+          // An instance is New(OSIZE); instance[0] = descriptor ptr.
+          // Dispatch obj.method(): movea (obj)→A0; (A0)→A1; M_OFF(A1)→A1; jsr.
+          // `odeloff` = the slot of the destructor method (END obj calls it).
           const delsize = uw();
           if (delsize) {
-            objrec.delsize = delsize;
-            objrec.delcode = l();              // destructor code offset
-            uw(); uw(); uw();                  // SUPERASCLEN, ODELOFF, ODESTR
+            objrec.delsize = delsize;          // descriptor (vtable) byte size
+            objrec.delcode = l();              // descriptor-BUILDER code offset
+            objrec.superasclen = uw();
+            objrec.odeloff = uw();             // destructor slot (END obj target)
+            objrec.odestr = uw();
             for (;;) {
               const tf = uw();
               if (tf === 0xffff) break;
-              const moff = uw();               // M_OFF: method code offset
+              const moff = uw();               // M_OFF: vtable slot (NOT code off)
               const asclen = uw();
               const mname = str(asclen);
               const nargs = uw();
               const ndef = uw();
               o += ndef * 4;
-              objrec.methods.push({ name: mname, offset: moff, args: nargs,
+              objrec.methods.push({ name: mname, slot: moff, offset: moff, args: nargs,
                 kind: tf & 0xff });
-              out.methods.push({ object: oname, name: mname, offset: moff, args: nargs });
+              out.methods.push({ object: oname, name: mname, slot: moff, offset: moff, args: nargs });
             }
             for (;;) { if (uw() === 0xffff) break; l(); }   // OACC list
           }
