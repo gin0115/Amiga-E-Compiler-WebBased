@@ -40,3 +40,8 @@ jobs:
         env:
           REQUIRE_VAMOS: 1
         run: node test/e2e/run-behavior.js
+
+      - name: Module-linking tests (link binary .m code modules, run, golden stdout)
+        env:
+          REQUIRE_VAMOS: 1
+        run: node test/e2e/run-link.js

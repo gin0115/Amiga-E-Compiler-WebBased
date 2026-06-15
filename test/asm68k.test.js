@@ -1,10 +1,19 @@
 import { test } from './harness.js';
 import { Asm, pushMask, popMask, D0, D1, D2, D3, D4, A0, A1, A2, A5, A6, A7 } from '../src/asm68k.js';
+import { writeHunk } from '../src/hunk.js';
 
 function bytes(fn) {
   const a = new Asm();
   fn(a);
   return [...a.finish()].map(b => b.toString(16).padStart(2, '0')).join(' ');
+}
+
+// big-endian longwords of a hunk image
+function longs(u8) {
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const r = [];
+  for (let i = 0; i + 4 <= u8.length; i += 4) r.push(dv.getUint32(i, false) >>> 0);
+  return r;
 }
 
 test('moveq', a => {
@@ -96,4 +105,54 @@ test('undefined label throws', a => {
   let threw = false;
   try { x.finish(); } catch { threw = true; }
   a.ok(threw);
+});
+
+// ---- Stage 1: relocations + absolute calls (binary-module linking) ----
+
+test('jsr_abs emits jsr xxx.L with the absolute target and a reloc', a => {
+  const x = new Asm();
+  x.labelAt('mod', 0x1234);
+  x.jsr_abs('mod');
+  const code = x.finish();
+  a.equal([...code].map(b => b.toString(16).padStart(2, '0')).join(' '),
+    '4e b9 00 00 12 34');
+  a.deepEqual(x.relocs, [2]);          // the 32-bit field sits at offset 2
+});
+
+test('blob + labelAt: a call resolves into appended module code', a => {
+  const x = new Asm();
+  x.jsr_abs('proc_foo');               // field at offset 2
+  x.rts();                             // 4e 75 at offset 6
+  const base = x.pc;                   // 8
+  x.blob(new Uint8Array([0x4e, 0x75])); // module body (rts) at 8
+  x.labelAt('proc_foo', base);
+  const code = x.finish();
+  a.equal([...code].map(b => b.toString(16).padStart(2, '0')).join(' '),
+    '4e b9 00 00 00 08 4e 75 4e 75');
+  a.deepEqual(x.relocs, [2]);
+});
+
+test('reloc32At records a module-internal reloc', a => {
+  const x = new Asm();
+  x.blob(new Uint8Array([0, 0, 0, 0]));
+  x.reloc32At(0);
+  x.finish();
+  a.deepEqual(x.relocs, [0]);
+});
+
+test('writeHunk: no relocs => no HUNK_RELOC32 (unchanged single-hunk image)', a => {
+  const code = new Uint8Array([0x4e, 0x75, 0, 0]); // 1 long
+  const out = longs(writeHunk(code));
+  // header(3f3),0,1,0,0,1, CODE(3e9),1,<rts pad>, END(3f2)
+  a.deepEqual(out, [0x3f3, 0, 1, 0, 0, 1, 0x3e9, 1, 0x4e750000, 0x3f2]);
+});
+
+test('writeHunk: relocs => HUNK_RELOC32 block', a => {
+  const code = new Uint8Array(8);      // 2 longs
+  const out = longs(writeHunk(code, [4, 0]));
+  // ... CODE,2,<8 bytes=2 longs>, RELOC32(3ec), count 2, hunk 0, offs 0 & 4, end 0, END
+  a.deepEqual(out, [
+    0x3f3, 0, 1, 0, 0, 2, 0x3e9, 2, 0, 0,
+    0x3ec, 2, 0, 0, 4, 0, 0x3f2,
+  ]);
 });

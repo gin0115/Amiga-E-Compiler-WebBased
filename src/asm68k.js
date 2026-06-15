@@ -9,7 +9,8 @@ export class Asm {
   constructor() {
     this.bytes = [];
     this.labels = new Map();      // name -> offset
-    this.fixups = [];             // {at, label, kind} kind: 'bra16'|'pc16'
+    this.fixups = [];             // {at, label, kind} kind: 'bra16'|'pc16'|'abs32'
+    this.relocs = [];             // byte offsets of 32-bit fields needing HUNK_RELOC32
   }
 
   get pc() { return this.bytes.length; }
@@ -21,6 +22,27 @@ export class Asm {
   label(name) {
     if (this.labels.has(name)) throw new Error(`duplicate label ${name}`);
     this.labels.set(name, this.pc);
+  }
+  // register a label at an explicit offset (e.g. a proc entry inside an
+  // appended binary-module code blob)
+  labelAt(name, offset) {
+    if (this.labels.has(name)) throw new Error(`duplicate label ${name}`);
+    this.labels.set(name, offset);
+  }
+  // append raw bytes (a linked module's CODE section)
+  blob(bytes) { for (let i = 0; i < bytes.length; i++) this.bytes.push(bytes[i]); }
+  // record that the 32-bit field already written at `offset` is an absolute
+  // address needing a HUNK_RELOC32 entry (used when copying a module's RELOC list)
+  reloc32At(offset) { this.relocs.push(offset); }
+  // register a 32-bit PC-relative fixup at an existing offset (a module's
+  // ifunc call site, patched jsr.l -> bsr.l into a runtime thunk)
+  bsr32At(offset, label) { this.fixups.push({ at: offset, label, kind: 'bsr32' }); }
+  // jsr to an absolute long address resolved from a label; emits a reloc so the
+  // loader rebases it. Reaches anywhere in the hunk (unlike the ±32KB bsr).
+  jsr_abs(label) {
+    this.w16(0x4eb9);                                   // jsr xxx.L
+    this.fixups.push({ at: this.pc, label, kind: 'abs32' });
+    this.w32(0);                                        // filled in finish()
   }
 
   // ---- moves ----
@@ -88,6 +110,9 @@ export class Asm {
   eorl_dd(src, dst) { this.w16(0xb180 | src << 9 | dst); } // eor.l Ds,Dd
 
   // ---- immediate byte/word ops and extra moves for the runtime ----
+  // 68020 32x32->32 long mul/div (used by ported EC intrinsic thunks I_MUL/I_DIV)
+  mulsl_dd(src, dst) { this.w16(0x4c00 | src); this.w16(0x0800 | dst << 12); }  // muls.l Ds,Dd
+  divsl_dd(src, dst) { this.w16(0x4c40 | src); this.w16(0x0800 | dst << 12); }  // divs.l Ds,Dd
   cmpib_imm(imm, dn) { this.w16(0x0c00 | dn); this.w16(imm & 0xff); }   // cmpi.b #i,Dn
   addib_imm(imm, dn) { this.w16(0x0600 | dn); this.w16(imm & 0xff); }   // addi.b #i,Dn
   movew_d_push(dn) { this.w16(0x3f00 | dn); }                           // move.w Dn,-(a7)
@@ -157,13 +182,34 @@ export class Asm {
     for (const f of this.fixups) {
       const target = this.labels.get(f.label);
       if (target === undefined) throw new Error(`undefined label ${f.label}`);
-      // both kinds: displacement relative to the extension word address
+      if (f.kind === 'abs32') {
+        // absolute long address of the target within the hunk; the loader
+        // relocates it by the load address via the HUNK_RELOC32 entry.
+        this.bytes[f.at] = (target >>> 24) & 0xff;
+        this.bytes[f.at + 1] = (target >>> 16) & 0xff;
+        this.bytes[f.at + 2] = (target >>> 8) & 0xff;
+        this.bytes[f.at + 3] = target & 0xff;
+        this.relocs.push(f.at);
+        continue;
+      }
+      if (f.kind === 'bsr32') {
+        // 32-bit PC-relative displacement (bsr.l into a runtime ifunc thunk);
+        // self-relative, so no reloc needed. Reaches anywhere in the hunk.
+        const disp = target - f.at;
+        this.bytes[f.at] = (disp >>> 24) & 0xff;
+        this.bytes[f.at + 1] = (disp >>> 16) & 0xff;
+        this.bytes[f.at + 2] = (disp >>> 8) & 0xff;
+        this.bytes[f.at + 3] = disp & 0xff;
+        continue;
+      }
+      // bra16/pc16: 16-bit displacement relative to the extension word
       const disp = target - f.at;
       if (disp < -32768 || disp > 32767) throw new Error(`fixup out of range: ${f.label}`);
       this.bytes[f.at] = (disp >> 8) & 0xff;
       this.bytes[f.at + 1] = disp & 0xff;
     }
     this.align();
+    this.relocs.sort((a, b) => a - b);
     return new Uint8Array(this.bytes);
   }
 }

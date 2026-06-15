@@ -107,6 +107,21 @@ export class Sem {
             this.libfuncs.set(f.name, { offset: f.offset, regs: f.regs, base: mod.lib.basename });
           }
         }
+        if (mod.isCodeModule && mod.code) {
+          // binary code module: its compiled PROCs are linked into the output
+          // (codegen appends mod.code and resolves proc_<name> into it).
+          this.binaryModules = this.binaryModules ?? [];
+          this.binaryProcs = this.binaryProcs ?? new Set();
+          this.binaryModules.push({
+            name, code: mod.code, procs: mod.procs, relocs: mod.relocs,
+            globs: mod.globs, globalsCount: mod.globalsCount,
+          });
+          for (const p of mod.procs) {
+            if (p.kind !== 'proc' || this.procs.has(p.name)) continue;
+            this.procs.set(p.name, { name: p.name, args: p.args, of: null, binary: true });
+            this.binaryProcs.add(p.name);
+          }
+        }
       }
     }
     // pass 1: collect global declarations

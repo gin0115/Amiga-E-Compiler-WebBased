@@ -12,6 +12,8 @@
 import { Asm } from './asm68k.js';
 import { writeHunk } from './hunk.js';
 import { AsmText } from './asmtext.js';
+import { ifuncName } from './ifuncs.js';
+import { IFUNC_THUNKS } from './ifunc_thunks.js';
 
 const D0 = 0, D1 = 1, D2 = 2, D3 = 3, D4 = 4, D5 = 5, D6 = 6, D7 = 7;
 const A0 = 0, A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, A6 = 6, A7 = 7;
@@ -114,9 +116,86 @@ export class Codegen {
       const label = p.of ? `proc_${p.of}$${p.name}` : `proc_${p.name}`;
       if (!this.a.labels.has(label)) this.emitProc(p);
     }
+    this.emitBinaryModules();
     this.emitData();
     if (this.errors.length) return null;
-    return writeHunk(a.finish());
+    const code = a.finish();
+    return writeHunk(code, a.relocs);
+  }
+
+  // Link binary code modules: append each module's CODE blob, resolve its
+  // exported PROCs to labels inside it, emit the runtime intrinsic (ifunc)
+  // thunks it calls, and fix up its relocations.
+  emitBinaryModules() {
+    const mods = this.sem.binaryModules ?? [];
+    if (!mods.length) return;
+    const a = this.a;
+
+    // 1. which E intrinsics do the linked modules call? emit a thunk per name.
+    // deprecated intrinsics keep a `#…_OLD` table name but share the base
+    // implementation (e.g. #Not_OLD -> Not, #DisposeLink_OLD -> DisposeLink)
+    const norm = n => n && n.replace(/^#/, '').replace(/_OLD$/, '');
+    const needed = new Set();
+    const missing = new Set();
+    for (const m of mods) {
+      for (const r of m.relocs) {
+        if (r.kind !== 'ifunc') continue;
+        const name = norm(ifuncName(r.ifuncNum));
+        if (name && IFUNC_THUNKS[name]) needed.add(name);
+        else missing.add(name ?? `#${r.ifuncNum}`);
+      }
+    }
+    if (missing.size) {
+      this.err({ line: 0 }, `intrinsics not yet ported: ${[...missing].join(', ')}`);
+      return;
+    }
+    for (const name of needed) {
+      const label = `ifunc_${name}`;
+      if (a.labels.has(label)) continue;
+      a.align();
+      a.label(label);
+      IFUNC_THUNKS[name](a);
+    }
+
+    // 2. append each module's code, resolve its procs, fix up its relocations.
+    for (const m of mods) {
+      a.align();
+      const base = a.pc;
+      a.blob(m.code);
+      for (const p of m.procs) {
+        if (p.kind === 'proc' || p.kind === 'label') {
+          const label = `proc_${p.name}`;
+          if (!a.labels.has(label)) a.labelAt(label, base + p.offset);
+        }
+      }
+      for (const r of m.relocs) {
+        if (r.kind === 'abs') {
+          // rebase the absolute longword (a module-internal code/data pointer)
+          // to its final position, and record a HUNK_RELOC32 entry.
+          const at = base + r.offset;
+          const cur = ((a.bytes[at] << 24) | (a.bytes[at + 1] << 16) |
+            (a.bytes[at + 2] << 8) | a.bytes[at + 3]) >>> 0;
+          const nv = (cur + base) >>> 0;
+          a.bytes[at] = (nv >>> 24) & 0xff;
+          a.bytes[at + 1] = (nv >>> 16) & 0xff;
+          a.bytes[at + 2] = (nv >>> 8) & 0xff;
+          a.bytes[at + 3] = nv & 0xff;
+          a.reloc32At(at);
+        } else if (r.kind === 'ifunc') {
+          // patch the placeholder `jsr abs.L` (0x4EB9) to `bsr.L` (0x61FF) into
+          // the runtime thunk; the 32-bit operand becomes a PC-relative disp.
+          const op = base + r.offset - 2;
+          a.bytes[op] = 0x61;
+          a.bytes[op + 1] = 0xff;
+          a.bsr32At(base + r.offset, `ifunc_${norm(ifuncName(r.ifuncNum))}`);
+        }
+      }
+      if (m.globs && m.globs.xrefs.length) {
+        this.err({ line: 0 }, `module '${m.name}': external globals (${
+          m.globs.xrefs.map(x => x.name).join(', ')}) not yet supported`);
+        return;
+      }
+    }
   }
 
   emitStartup() {
@@ -2628,7 +2707,10 @@ export class Codegen {
         this.exp(arg, ctx);
         a.movel_d_push(D0);
       }
-      a.bsr(`proc_${callee.name}`);
+      // binary-module procs live in an appended code blob, possibly >32KB
+      // away, so call them absolute (with a reloc) rather than PC-relative bsr.
+      if (this.sem.binaryProcs?.has(callee.name)) a.jsr_abs(`proc_${callee.name}`);
+      else a.bsr(`proc_${callee.name}`);
       if (e.args.length) {
         if (e.args.length <= 2) a.addql_a(4 * e.args.length, A7);
         else a.addal_imm(4 * e.args.length, A7);
