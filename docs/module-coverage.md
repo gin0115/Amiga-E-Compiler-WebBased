@@ -184,21 +184,37 @@ Updated continuously by the /loop sweep. 149 code modules.
 
 
 ---
-## DEEP BLOCKER: class-descriptor table (module-internal NEW)
+## SOLVED: class-descriptor table (module-internal NEW)
 
 EC builds EVERY class descriptor at program STARTUP and stores each pointer at a
-fixed positive A4 slot (4,8,c,10,…, likely OID*4 where OID = object-struct
-offset 6). A class's methods that internally `NEW` sub-objects read the
-descriptor from its slot (baked into the .m — integer.m has zero GLOBS). ecomp
-builds descriptors lazily at the call site instead, so module-internal NEW reads
-empty slots and crashes (jsr through a null descriptor[slot]).
+fixed A4 slot. A class method that internally `NEW`s a sub-object reads that
+class's descriptor pointer from its slot via a `move.l ($0,A4),(A0)` placeholder
+the linker binds. ecomp previously built descriptors lazily, only at main-level
+NEW, so module-internal NEW read empty slots and crashed (jsr through a null
+`descriptor[slot]`).
 
-Affects every class whose methods internally NEW: ALL 35 oomodules (after the
-cross-module-inheritance fix they now LINK with 0 unbound jsr $0, but crash on
-the first internal NEW) + the complex afc classes (StringNode, Displayer,
-Mousepointer, Worldbuilder, mgui, super_picture…).
+**How EC records the slot references** (the missing piece — verified by
+instruction-tracing `oomodules/.../integer` vs ecomp, command-by-command):
+- **MODINFO** records CROSS-module descriptor refs, in two flavors:
+  1. `jsr abs.L $0` (`4e b9`) — call the parent class's descriptor BUILDER
+     (inheritance); patched to `bsr.L moddescr_<parent>`.
+  2. `move.l ($0,A4),…` (`20 ac …`) — read the parent class's descriptor
+     POINTER from its A4 slot; the 16-bit displacement at `coff` is a `$0`
+     placeholder, patched to the parent's descriptor slot.
+- **OACC list** (the OBJ-section `[TYP.w][CODE.l]*` access list, previously
+  discarded) records SAME-module self/sibling descriptor refs — also `$0`
+  displacement placeholders, patched to the class's own descriptor slot.
 
-Fix (separate major effort): replicate EC's class→slot assignment (cross-module
-consistent) and emit a startup pass that builds every linked class's descriptor
-into its slot, so module-internal NEW finds it. Simple classes (Parser, stack,
-the synthetic shape/circle) don't internal-NEW, so they already work.
+**Fix** (codegen.js + emod.js + sem.js):
+- `emod.js` now captures each class's `oacc` list.
+- `emitDescriptorTable()` builds EVERY linked binary class's descriptor at
+  startup (just before `bsr proc_main`) into its `__descrptr_<class>` slot.
+- `emitBinaryModules()` patches MODINFO flavor-2 refs (to the parent's slot) and
+  all OACC refs (to the class's own slot).
+
+Verified by `tools/internal-new-verify.js`: the full integer inheritance chain
+(integer→number→sort→object→catalogList→nuArray→string) runs `val=0`, identical
+to EC. No regressions (95/95 unit, 4/4 OOP, 29/29 intrinsics, xmod all green).
+This unlocks module-internal NEW for the oomodules + complex afc classes; the
+remaining oomodule corpus "EC could not build" entries are the synthetic test
+harness, not ecomp — each needs a real example program written against it.

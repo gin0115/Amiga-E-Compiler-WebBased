@@ -179,6 +179,7 @@ export class Sem {
       this.binaryModules.push({
         name, code: mod.code, procs: mod.procs, relocs: mod.relocs,
         globs: mod.globs, globalsCount: mod.globalsCount, modinfo: mod.modinfo,
+        objects: mod.objects,   // carries each class's OACC (descriptor-ref) list
       });
       for (const p of mod.procs) {
         if (p.kind !== 'proc' || this.procs.has(p.name)) continue;

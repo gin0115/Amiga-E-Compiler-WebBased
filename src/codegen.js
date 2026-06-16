@@ -259,12 +259,42 @@ export class Codegen {
         if (!this.sem.binaryClasses?.has(mi.symbol)) continue;   // only class parents we linked
         const target = `moddescr_${mi.symbol}`;
         for (const r of mi.refs) {
-          // coff is the 32-bit operand location; the jsr abs.L opcode is at -2
           const op = base + r.coff - 2;
-          if (a.bytes[op] !== 0x4e || a.bytes[op + 1] !== 0xb9) continue;  // expect jsr abs.L
-          a.bytes[op] = 0x61;            // bsr.L
-          a.bytes[op + 1] = 0xff;
-          a.bsr32At(base + r.coff, target);
+          if (a.bytes[op] === 0x4e && a.bytes[op + 1] === 0xb9) {
+            // flavor 1 — `jsr abs.L $0` calling the parent class's descriptor
+            // BUILDER. coff is the 32-bit operand; patch the opcode to bsr.L and
+            // bind the displacement to the builder label.
+            a.bytes[op] = 0x61;          // bsr.L
+            a.bytes[op + 1] = 0xff;
+            a.bsr32At(base + r.coff, target);
+          } else {
+            // flavor 2 — an instruction reading the parent class's descriptor
+            // POINTER from a fixed A4 slot (e.g. `move.l ($0,A4),(A0)` when a
+            // module method does `NEW <parentclass>`). The 16-bit A4
+            // displacement at coff is a placeholder ($0); bind it to the
+            // parent's descriptor slot (populated at startup by
+            // emitDescriptorTable). globalSlot/binaryClassGlobals memoises, so
+            // ordering vs emitDescriptorTable does not matter.
+            const slot = this.binaryClassGlobals(this.sem.binaryClasses.get(mi.symbol)).ptrSlot;
+            a.bytes[base + r.coff] = (slot >> 8) & 0xff;
+            a.bytes[base + r.coff + 1] = slot & 0xff;
+          }
+        }
+      }
+      // bind OACC (object-access) refs: a SAME-MODULE class method doing
+      // `NEW <class>` reads that class's descriptor pointer from a fixed A4 slot
+      // via a `move.l ($0,A4),...` placeholder. Each OACC entry records the
+      // 16-bit displacement location; patch it to the class's descriptor slot
+      // (populated at startup by emitDescriptorTable). Cross-module descriptor
+      // reads are handled above via MODINFO; OACC is the self/sibling case.
+      for (const [, obj] of m.objects ?? []) {
+        if (!obj.oacc?.length) continue;
+        const cls = this.sem.binaryClasses?.get(obj.name);
+        if (!cls) continue;
+        const slot = this.binaryClassGlobals(cls).ptrSlot;
+        for (const acc of obj.oacc) {
+          a.bytes[base + acc.coff] = (slot >> 8) & 0xff;
+          a.bytes[base + acc.coff + 1] = slot & 0xff;
         }
       }
     }
@@ -408,6 +438,7 @@ export class Codegen {
         }
       }
     }
+    this.emitDescriptorTable();        // build all linked class descriptors
     a.bsr('proc_main');
     a.label('__exit');                 // CleanUp() lands here with SP restored
     a.bsr('__freeall');                // release NEW/New/String allocations
@@ -1982,6 +2013,20 @@ export class Codegen {
     a.lea_disp(g.region, A4, A0);            // A0 = &descriptor region
     a.movel_a_disp(A0, g.ptrSlot, A4);       // remember the descriptor pointer
     a.jsr_abs(`moddescr_${cls.name}`);       // builder fills [A0]: size + methods
+  }
+
+  // Build EVERY linked binary class's descriptor at startup, into its A4 slot.
+  // Module-internal NEW (a class method that does `NEW x` of another class)
+  // reads x's descriptor pointer from a fixed A4 slot bound via a MODINFO
+  // "descriptor-pointer" ref (see emitBinaryModules) — that slot must already
+  // hold the descriptor before any module code runs. EC builds the whole table
+  // in its own startup; ecomp previously built lazily at each main-level NEW, so
+  // descriptors only reachable from inside module code were never built.
+  emitDescriptorTable() {
+    for (const cls of this.sem.binaryClasses?.values() ?? []) {
+      if (cls.delcode == null) continue;     // interface-only class (no vtable)
+      this.buildDescriptor(cls);
+    }
   }
 
   // obj.method(args): push args (left-to-right, same as binary procs), load

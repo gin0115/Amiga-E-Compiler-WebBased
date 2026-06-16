@@ -112,7 +112,7 @@ export function readEmod(buf, name = '<module>') {
           }
         }
         const size = uw();
-        const objrec = { name: oname, members, size, privates, methods: [], delcode: null };
+        const objrec = { name: oname, members, size, privates, methods: [], oacc: [], delcode: null };
         out.objects.set(oname, objrec);
         if (out.version >= 7) {
           // v7+ class trailer (EC WRITEMODULE format). DELSIZE word; if nonzero
@@ -153,7 +153,16 @@ export function readEmod(buf, name = '<module>') {
                 kind: tf & 0xff });
               out.methods.push({ object: oname, name: mname, slot: moff, offset: moff, args: nargs });
             }
-            for (;;) { if (uw() === 0xffff) break; l(); }   // OACC list
+            // OACC list — "object access": code offsets that reference THIS
+            // class's descriptor pointer (same-module self/sibling NEW sites).
+            // Each entry is [TYP.w][CODE.l]; CODE is the location of a 16-bit
+            // A4 displacement placeholder ($0) the linker binds to the class's
+            // descriptor slot. (Cross-module descriptor refs are in MODINFO.)
+            for (;;) {
+              const typ = uw();
+              if (typ === 0xffff) break;
+              objrec.oacc.push({ typ, coff: l() >>> 0 });
+            }
           }
         }
       } else if (job === 3) {                    // JOB_CODE
