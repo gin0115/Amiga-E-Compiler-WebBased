@@ -43,7 +43,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` amigalib/io
 - [ ] `RUN?  ` amigalib/lists
 - [ ] `RUN?  ` amigalib/ports
-- [ ] `RUN?  ` amigalib/random
+- [x] `RUN-OK` amigalib/random (fixed: GLOBS drel binding — RNG seed; rangeRand identical to EC)
 - [ ] `RUN?  ` amigalib/time
 
 ## class (4)
@@ -98,7 +98,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` other/battclock
 - [ ] `RUN?  ` other/battmem
 - [ ] `RUN?  ` other/bitfield
-- [ ] `RUN?  ` other/bits
+- [x] `RUN-OK` other/bits (setBit/toggleBit/bitState identical to EC)
 - [ ] `RUN?  ` other/cia
 - [ ] `RUN?  ` other/clearlist
 - [ ] `RUN?  ` other/cloneworkbench
@@ -114,7 +114,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` other/isidentifier
 - [ ] `RUN?  ` other/lowerchar
 - [ ] `RUN?  ` other/misc
-- [ ] `RUN?  ` other/mod
+- [x] `RUN-OK` other/mod (identical to EC)
 - [ ] `RUN?  ` other/potgo
 - [ ] `RUN?  ` other/qualifieditemaddress
 - [ ] `RUN?  ` other/readstr
@@ -125,9 +125,9 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` other/skiptochar
 - [ ] `RUN?  ` other/skiptoedelim
 - [ ] `RUN?  ` other/skipwhite
-- [ ] `RUN?  ` other/split
+- [x] `RUN-OK` other/split (argSplit identical to EC)
 - [ ] `RUN?  ` other/stack
-- [ ] `RUN?  ` other/strcopy
+- [x] `RUN-OK` other/strcopy (strCopy identical to EC)
 - [ ] `RUN?  ` other/upperchar
 
 ## plugins (14)
@@ -161,7 +161,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/constructors
 - [ ] `RUN?  ` tools/cookrawkey
 - [ ] `RUN?  ` tools/copylist
-- [ ] `RUN?  ` tools/ctype
+- [x] `RUN-OK` tools/ctype (is*/toupper/tolower identical to EC)
 - [ ] `RUN?  ` tools/exceptions
 - [ ] `RUN?  ` tools/file
 - [ ] `RUN?  ` tools/filledvector
