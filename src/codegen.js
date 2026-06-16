@@ -558,6 +558,43 @@ export class Codegen {
     a.movem_pop(1 << D3);
     a.rts();
 
+    // __htoa: d0=value (unsigned) → uppercase hex to A2 (advances), no leading
+    // zeros, matching E's WriteF \h. Digits pushed low→high, popped to reverse.
+    a.label('__htoa');
+    a.movel_d_push(D3);
+    a.tstl(D0);
+    a.bne('__ht_nz');
+    a.moveb_imm_postinc(48, A2);       // '0'
+    a.bra('__ht_done');
+    a.label('__ht_nz');
+    a.moveq(0, D3);                    // digit count
+    a.label('__ht_loop');
+    a.tstl(D0);
+    a.beq('__ht_emit');
+    a.movel_dd(D0, D1);
+    a.andil_imm(15, D1);               // low nibble
+    a.cmpib_imm(10, D1);
+    a.bcc(COND.CS, '__ht_dig');        // <10 → '0'..'9'
+    a.addib_imm(55, D1);               // 'A'-10
+    a.bra('__ht_push');
+    a.label('__ht_dig');
+    a.addib_imm(48, D1);               // '0'
+    a.label('__ht_push');
+    a.movew_d_push(D1);
+    a.addql(1, D3);
+    a.lsrl_imm(4, D0);                 // unsigned >> 4
+    a.bra('__ht_loop');
+    a.label('__ht_emit');
+    a.tstl(D3);
+    a.beq('__ht_done');
+    a.movew_pop_d(D1);
+    a.moveb_d_postinc(D1, A2);
+    a.subql(1, D3);
+    a.bra('__ht_emit');
+    a.label('__ht_done');
+    a.movel_pop_d(D3);
+    a.rts();
+
     // __format: core E format engine. a0=fmt, a1=args, a2=out; advances a2.
     a.label('__format');
     a.label('__wf_loop');
@@ -575,6 +612,8 @@ export class Codegen {
     a.beq('__wf_str');
     a.cmpib_imm(99, D0);               // 'c'
     a.beq('__wf_char');
+    a.cmpib_imm(104, D0);              // 'h' — hex (uppercase, no leading zeros)
+    a.beq('__wf_hex');
     a.moveb_imm_postinc(0x5c, A2);     // unknown: keep both chars
     a.label('__wf_lit');
     a.moveb_d_postinc(D0, A2);
@@ -600,6 +639,11 @@ export class Codegen {
     a.movel_ind_d(A1, D0);
     a.subql_a(4, A1);
     a.moveb_d_postinc(D0, A2);
+    a.bra('__wf_loop');
+    a.label('__wf_hex');
+    a.movel_ind_d(A1, D0);
+    a.subql_a(4, A1);
+    a.bsr('__htoa');
     a.bra('__wf_loop');
     a.label('__wf_done');
     a.rts();

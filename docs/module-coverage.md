@@ -97,7 +97,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 
 - [ ] `RUN?  ` other/battclock
 - [ ] `RUN?  ` other/battmem
-- [ ] `RUN?  ` other/bitfield
+- [x] `RUN-OK` other/bitfield (lshr; identical to EC)
 - [x] `RUN-OK` other/bits (setBit/toggleBit/bitState identical to EC)
 - [ ] `RUN?  ` other/cia
 - [ ] `RUN?  ` other/clearlist
@@ -111,7 +111,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` other/fastinsert
 - [ ] `RUN?  ` other/initlist
 - [ ] `RUN?  ` other/isdigit
-- [ ] `RUN?  ` other/isidentifier
+- [x] `RUN-OK` other/isidentifier (identical to EC)
 - [ ] `RUN?  ` other/lowerchar
 - [ ] `RUN?  ` other/misc
 - [x] `RUN-OK` other/mod (identical to EC)
@@ -121,9 +121,9 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` other/sendexplorer
 - [ ] `RUN?  ` other/sendrexx
 - [ ] `RUN?  ` other/setprogname
-- [ ] `RUN?  ` other/skipnonwhite
+- [x] `RUN-OK` other/skipnonwhite (identical to EC)
 - [ ] `RUN?  ` other/skiptochar
-- [ ] `RUN?  ` other/skiptoedelim
+- [x] `RUN-OK` other/skiptoedelim (identical to EC)
 - [ ] `RUN?  ` other/skipwhite
 - [x] `RUN-OK` other/split (argSplit identical to EC)
 - [ ] `RUN?  ` other/stack

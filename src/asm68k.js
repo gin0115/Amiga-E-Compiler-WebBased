@@ -120,6 +120,7 @@ export class Asm {
   cmpib_imm(imm, dn) { this.w16(0x0c00 | dn); this.w16(imm & 0xff); }   // cmpi.b #i,Dn
   cmpiw_imm(imm, dn) { this.w16(0x0c40 | dn); this.w16(imm & 0xffff); } // cmpi.w #i,Dn
   cmpil_imm(imm, dn) { this.w16(0x0c80 | dn); this.w32(imm); }          // cmpi.l #i,Dn
+  andil_imm(imm, dn) { this.w16(0x0280 | dn); this.w32(imm); }          // andi.l #i,Dn
   addiw_imm(imm, dn) { this.w16(0x0640 | dn); this.w16(imm & 0xffff); } // addi.w #i,Dn
   addqw_disp(q, d, an) { this.w16(0x5068 | (q === 8 ? 0 : q) << 9 | an); this.w16(d); } // addq.w #q,d16(An)
   addib_imm(imm, dn) { this.w16(0x0600 | dn); this.w16(imm & 0xff); }   // addi.b #i,Dn
