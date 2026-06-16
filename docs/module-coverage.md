@@ -158,7 +158,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/arexx
 - [ ] `RUN?  ` tools/async
 - [ ] `RUN?  ` tools/clonescreen
-- [ ] `RUN?  ` tools/constructors
+- [x] `RUN-OK` tools/constructors (newlist/newnode + AddTail; fixed: exec sysbase slot — identical to EC)
 - [ ] `RUN?  ` tools/cookrawkey
 - [ ] `RUN?  ` tools/copylist
 - [x] `RUN-OK` tools/ctype (is*/toupper/tolower identical to EC)

@@ -52,7 +52,7 @@ export class Codegen {
     // and all program/module data globals are allocated at POSITIVE offsets.
     this.globalSlots = new Map([
       ['stdout', -8], ['__stdout', -8], ['conout', -12], ['stdrast', -16],
-      ['arg', -32], ['wbmessage', -36], ['execbase', -40],
+      ['arg', -32], ['wbmessage', -36], ['execbase', -40], ['sysbase', -40],
       ['dosbase', -44], ['__dosbase', -44], ['intuitionbase', -48], ['gfxbase', -52],
       ['__mathbase', -56], ['__mathtrans', -60],
       ['exception', -84], ['stdin', -92], ['exceptioninfo', -96],
