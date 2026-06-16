@@ -142,6 +142,18 @@ export class Codegen {
     this.emitData();
     if (this.errors.length) return null;
     const code = a.finish();
+    // diagnostics for verbose builds (ignored by callers that don't want them)
+    this.stats = {
+      codeBytes: code.length,
+      relocCount: a.relocs.length,
+      globalSize: this.globalSize,
+      modules: (this.sem.binaryModules ?? []).map(m => ({
+        name: m.name,
+        codeBytes: m.code ? m.code.length : 0,
+        procs: (m.procs ?? []).filter(p => p.kind !== 'label').length,
+        relocs: (m.relocs ?? []).length,
+      })),
+    };
     return writeHunk(code, a.relocs);
   }
 
@@ -3284,5 +3296,5 @@ export class Codegen {
 export function compileProgram(program, sem) {
   const cg = new Codegen(sem);
   const bin = cg.compile(program);
-  return { bin, errors: cg.errors };
+  return { bin, errors: cg.errors, stats: cg.stats ?? null };
 }
