@@ -218,3 +218,27 @@ to EC. No regressions (95/95 unit, 4/4 OOP, 29/29 intrinsics, xmod all green).
 This unlocks module-internal NEW for the oomodules + complex afc classes; the
 remaining oomodule corpus "EC could not build" entries are the synthetic test
 harness, not ecomp — each needs a real example program written against it.
+
+## Proc-module sweep status (loop)
+
+Console-verifiable computational/string modules are DONE (RUN-OK, byte-identical to EC):
+ctype, split, mod, strCopy, bits, random, isdigit, lowerchar, upperchar, skipwhite,
+skiptochar, simplelex, tools/file, isidentifier, skipnonwhite, skiptoedelim, bitfield.
+
+Systemic linker/runtime bugs found+fixed via the sweep: class-descriptor table (PR #8),
+GLOBS drel binding (#9), cross-module proc calls (#11), binary-proc DEFAULT ARGS (#14),
+WriteF \h hex (#15).
+
+REMAINING proc modules are mostly NOT cleanly verifiable under the faked-libs console
+harness — they need real hardware/libraries or complex exec setups:
+- exec-list builders/iterators: tools/constructors, tools/iterators, tools/copylist,
+  amigalib/lists, other/initlist, other/clearlist, other/fastinsert, other/dll,
+  other/disposeelinkedlist. (NOTE: a draft tools/constructors test where EC ran
+  clean-but-empty made ecomp CRASH — but the test's exec-list API usage was itself
+  wrong, so not a confirmed ecomp bug; revisit with a correct AddTail/traversal test.)
+- hardware/device: other/cia, potgo, disk, battclock, battmem, misc, clonescreen,
+  cloneworkbench, tools/scrbuffer/clonescreen/pt (need real chips/intuition/display).
+- timer/task: amigalib/time, Tasks, ports, interrupts, io, cx.
+- double math: tools/longreal/longrealtiny (need real mathieeedoub libs).
+These need the real-Kickstart-libs harness (tools/run-gui-vamos.sh) or live SAE, not
+the faked console oracle.
