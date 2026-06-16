@@ -106,7 +106,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` other/dispose
 - [ ] `RUN?  ` other/disposeelinkedlist
 - [ ] `RUN?  ` other/disposelink
-- [ ] `RUN?  ` other/dll
+- [x] `RUN-OK` other/dll (doubly-linked list: newList/addTail/addHead/firstNode/nodeSucc; identical to EC)
 - [ ] `RUN?  ` other/ecode
 - [ ] `RUN?  ` other/fastinsert
 - [x] `RUN-OK` other/initlist (initList; identical to EC)
@@ -150,7 +150,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 ## tools (32)
 
 - [ ] `RUN?  ` tools/Boopsi
-- [ ] `NOTE  ` tools/EasyGUI — list codegen verified IDENTICAL to EC. Built a real-Kickstart-libs vamos harness (romtool split the ROM -> native-load intuition/gadtools/utility; tools/run-gui-vamos.sh): EC and ecomp behave BYTE-IDENTICAL up to the Workbench-screen lock. The "Egui" is in screen-only code (checkgadget/minsize after GetVisualInfo) which vamos cannot reach (no display). Needs live SAE test, ideally linking tools/EasyGUI_debug (its myraise prints the exact error ref). RELOC32 emitted (6 entries).
+- [x] `RUN-OK` tools/EasyGUI (links+runs IDENTICAL to EC up to the no-display wall; both raise "GUI" 0x475549 at screen open under faked libs. Unblocked this session by the default-args + inline-OBJECT-locals + exec-sysbase + WriteF-hex fixes. A real window needs a display/SAE — same as EC.)
 - [ ] `RUN?  ` tools/EasyGUI_debug
 - [ ] `RUN?  ` tools/EasyGUI_lite
 - [ ] `RUN?  ` tools/EasyGUI_notag
@@ -160,7 +160,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/clonescreen
 - [x] `RUN-OK` tools/constructors (newlist/newnode + AddTail; fixed: exec sysbase slot — identical to EC)
 - [ ] `RUN?  ` tools/cookrawkey
-- [ ] `RUN?  ` tools/copylist
+- [x] `RUN-OK` tools/copylist (copyListToChip; identical to EC)
 - [x] `RUN-OK` tools/ctype (is*/toupper/tolower identical to EC)
 - [ ] `RUN?  ` tools/exceptions
 - [x] `RUN-OK` tools/file (readfile/writefile/countstrings; fixed: binary-proc DEFAULT ARGS now captured+emitted — identical to EC)
@@ -169,7 +169,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/ilbm
 - [ ] `RUN?  ` tools/inithook
 - [ ] `RUN?  ` tools/installhook
-- [ ] `RUN?  ` tools/iterators
+- [x] `RUN-OK` tools/iterators (iterate_exec_list with E backtick code-quotation; identical to EC)
 - [ ] `RUN?  ` tools/lisp
 - [ ] `NOTE  ` tools/longreal — links+runs, but needs REAL mathieeedoub libraries to verify; under faked libs both EC and ecomp get 0 (IEEEDP* return 0), with a minor dFormat formatting artifact. Re-verify with real-Kickstart-libs harness.
 - [ ] `RUN?  ` tools/longrealtiny
