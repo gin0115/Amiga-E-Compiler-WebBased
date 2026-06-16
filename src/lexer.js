@@ -86,8 +86,9 @@ export function lex(src, filename = '<input>') {
       continue;
     }
 
-    // line comment
-    if (c === '-' && src[i + 1] === '>') {
+    // line comment: '->' (classic Amiga E) or '//' (E-VO / modern E). The
+    // '/*' block comment above is matched first, and a lone '/' still divides.
+    if ((c === '-' && src[i + 1] === '>') || (c === '/' && src[i + 1] === '/')) {
       while (i < n && src[i] !== '\n') { i++; col++; }
       continue;
     }

@@ -34,6 +34,13 @@ test('line comment ->', a => {
   a.deepEqual(types('a -> all of this ignored\nb'), ['ident', 'nl', 'ident']);
 });
 
+test('line comment // (E-VO / modern E)', a => {
+  a.deepEqual(types('a // all of this ignored\nb'), ['ident', 'nl', 'ident']);
+  // a lone '/' still divides; '/*' is still a block comment
+  a.deepEqual(types('a / b'), ['ident', '/', 'ident']);
+  a.deepEqual(types('a /* x */ b'), ['ident', 'ident']);
+});
+
 test('multi-line block comment separates statements', a => {
   a.deepEqual(types('a /* c1\nc2 */ b'), ['ident', 'nl', 'ident']);
 });
