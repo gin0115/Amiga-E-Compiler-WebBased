@@ -37,10 +37,7 @@ function runOracle(work, src, aux) {
   vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${EC_DIR}`,
     '-a', 'emodules:work:+mods:', '--cwd', 'work:', 'bin:EC', 'ref.e']);
   if (!existsSync(join(work, 'ref'))) return { ok: false, out: '<oracle compile failed>' };
-  // Run on 68020 — ecomp targets the 68020 (binary-module ifunc relocs use
-  // BSR.L, a 68020 instruction; the IDE's A1200 is a 68020). EC's 68000 output
-  // runs fine on a 68020, so the differential comparison stays valid.
-  const r = vamos(['-q', '-C', '68020', '-O', FAKE, '-V', `work:${work}`, '--cwd', 'work:', 'work:ref']);
+  const r = vamos(['-q', '-O', FAKE, '-V', `work:${work}`, '--cwd', 'work:', 'work:ref']);
   return { ok: true, out: r.out };
 }
 
@@ -53,7 +50,7 @@ function runEcomp(work, src, aux) {
   const { bin, errors } = compileProgram(program, sem);
   if (errors.length) return { ok: false, out: '<codegen: ' + errors[0].msg + '>' };
   writeFileSync(join(work, 'ours'), bin);
-  const r = vamos(['-q', '-C', '68020', '-O', FAKE, '-V', `work:${work}`, '--cwd', 'work:', 'work:ours']);
+  const r = vamos(['-q', '-O', FAKE, '-V', `work:${work}`, '--cwd', 'work:', 'work:ours']);
   return { ok: true, out: r.out };
 }
 
