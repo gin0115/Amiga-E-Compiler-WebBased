@@ -148,7 +148,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 ## tools (32)
 
 - [ ] `RUN?  ` tools/Boopsi
-- [ ] `NOTE  ` tools/EasyGUI — list codegen verified IDENTICAL to EC; GUI renders fine when EC-built (screenshot). ecomp raises EasyGUI "Egui" check at runtime — a linking divergence reachable only on real Kickstart (vamos faults at LIB before the check). Needs live-site debug.
+- [ ] `NOTE  ` tools/EasyGUI — list codegen verified IDENTICAL to EC. Built a real-Kickstart-libs vamos harness (romtool split the ROM -> native-load intuition/gadtools/utility; tools/run-gui-vamos.sh): EC and ecomp behave BYTE-IDENTICAL up to the Workbench-screen lock. The "Egui" is in screen-only code (checkgadget/minsize after GetVisualInfo) which vamos cannot reach (no display). Needs live SAE test, ideally linking tools/EasyGUI_debug (its myraise prints the exact error ref). RELOC32 emitted (6 entries).
 - [ ] `RUN?  ` tools/EasyGUI_debug
 - [ ] `RUN?  ` tools/EasyGUI_lite
 - [ ] `RUN?  ` tools/EasyGUI_notag
