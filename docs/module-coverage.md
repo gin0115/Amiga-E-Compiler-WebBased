@@ -55,6 +55,8 @@ Updated continuously by the /loop sweep. 149 code modules.
 
 ## oomodules (35)
 
+> **Status:** cross-module class inheritance now links + binds (integer->number->sort->object chain resolves; 0 unbound jsr $0). Remaining: these classes also do MODULE-INTERNAL NEW that reads class-descriptor pointers from fixed A4 slots the module bakes in (same as afc/StringNode) — a separate descriptor-table layer still to crack. So they link but crash at runtime on the first internal NEW.
+
 - [ ] `RUN?  ` oomodules/commodity
 - [ ] `RUN?  ` oomodules/coordinate
 - [ ] `RUN?  ` oomodules/coordinate/line

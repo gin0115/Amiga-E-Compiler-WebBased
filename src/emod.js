@@ -41,6 +41,7 @@ export function readEmod(buf, name = '<module>') {
     globs: { xrefs: [], drels: [] },    // xrefs:{name,refs[]}  drels:{refs[]}
     globalsCount: 0,
     methods: [],                        // {object, name, offset, args} for class methods
+    modinfo: [],                        // cross-module refs: {submodule, symbol, kind, refs:[{coff,type}]}
     isCodeModule: false,
     partial: false, error: null,
   };
@@ -243,21 +244,30 @@ export function readEmod(buf, name = '<module>') {
         out.lib = { libname, basename, funcs };
         break;                                   // LIB consumes to end
       } else if (job === 9) {                    // JOB_MODINFO — submodule xref
-        o += 4;                                  // info; not needed for linking
+        // Cross-module references: each imported submodule lists the symbols
+        // this module refers to, with the code offsets that need binding to the
+        // submodule's symbol. Used for cross-module class inheritance (a child
+        // class's .m references its parent class/methods here). Captured into
+        // out.modinfo so the linker can resolve them.
+        o += 4;                                  // info
         let mlen;
         while ((mlen = uw()) !== 0) {            // submodule name length
-          o += mlen;                             // skip name
+          const submodule = str(mlen);
           let sym;
           while ((sym = uw()) !== 0) {           // symbol type
             const idlen = uw();
-            o += idlen;                          // skip id
-            if (sym === 2) {                     // proc/label: numrefs longs
-              uw();                              // flag word
+            const id = str(idlen);
+            if (sym === 2) {                     // proc/label: numrefs code-offset longs
+              const flag = uw();
               const numrefs = uw();
-              o += numrefs * 4;
-            } else {                             // other: naccess 6-byte records
+              const refs = [];
+              for (let i = 0; i < numrefs; i++) refs.push({ coff: l() >>> 0, type: 0 });
+              out.modinfo.push({ submodule, symbol: id, kind: 'proc', flag, refs });
+            } else {                             // class/object etc: naccess [coff.l][type.w]
               const naccess = uw();
-              o += naccess * 6;
+              const refs = [];
+              for (let i = 0; i < naccess; i++) { const coff = l() >>> 0; const type = uw(); refs.push({ coff, type }); }
+              out.modinfo.push({ submodule, symbol: id, kind: sym, refs });
             }
           }
         }

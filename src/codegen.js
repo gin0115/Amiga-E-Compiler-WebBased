@@ -251,6 +251,22 @@ export class Codegen {
           a.bytes[at + 1] = slot & 0xff;
         }
       }
+      // bind cross-module class-inheritance refs (MODINFO): each ref site is a
+      // placeholder `jsr abs.L $0` calling the parent class's descriptor-builder
+      // in another linked module. Patch to `bsr.L` into moddescr_<parent>, like
+      // the ifunc relocs. (A class ref is to the parent's builder at delcode.)
+      for (const mi of m.modinfo ?? []) {
+        if (!this.sem.binaryClasses?.has(mi.symbol)) continue;   // only class parents we linked
+        const target = `moddescr_${mi.symbol}`;
+        for (const r of mi.refs) {
+          // coff is the 32-bit operand location; the jsr abs.L opcode is at -2
+          const op = base + r.coff - 2;
+          if (a.bytes[op] !== 0x4e || a.bytes[op + 1] !== 0xb9) continue;  // expect jsr abs.L
+          a.bytes[op] = 0x61;            // bsr.L
+          a.bytes[op + 1] = 0xff;
+          a.bsr32At(base + r.coff, target);
+        }
+      }
     }
   }
 

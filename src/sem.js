@@ -91,50 +91,7 @@ export class Sem {
           }
           continue;
         }
-        for (const [k, v] of mod.consts) this.consts.set(k, v);
-        for (const [k, obj] of mod.objects) {
-          const members = new Map();
-          for (const [mn, m] of obj.members) {
-            members.set(mn, { offset: m.offset, size: m.val || 0, type: null });
-          }
-          this.objects.set(k, { name: k, of: null, members, size: obj.size });
-          // A class from a binary module dispatches via a runtime vtable
-          // ("descriptor") built by the module's own code — see
-          // docs/oop-dispatch.md. Record the metadata codegen needs.
-          if (mod.isCodeModule && obj.methods && obj.methods.length) {
-            this.binaryClasses = this.binaryClasses ?? new Map();
-            const methods = new Map();
-            for (const me of obj.methods) methods.set(me.name, { slot: me.slot ?? me.offset, args: me.args, kind: me.kind });
-            this.binaryClasses.set(k, {
-              name: k, module: name, osize: obj.size, delsize: obj.delsize,
-              delcode: obj.delcode, odestr: obj.odestr, methods,
-              ctorSlot: methods.get(k)?.slot ?? null,   // ctor = method named == class
-            });
-          }
-        }
-        if (mod.lib) {
-          this.libBases.set(mod.lib.basename, mod.lib.libname);
-          this.globals.set(mod.lib.basename, {});   // base var is a global
-          for (const f of mod.lib.funcs) {
-            if (!f.name) continue;
-            this.libfuncs.set(f.name, { offset: f.offset, regs: f.regs, base: mod.lib.basename });
-          }
-        }
-        if (mod.isCodeModule && mod.code) {
-          // binary code module: its compiled PROCs are linked into the output
-          // (codegen appends mod.code and resolves proc_<name> into it).
-          this.binaryModules = this.binaryModules ?? [];
-          this.binaryProcs = this.binaryProcs ?? new Set();
-          this.binaryModules.push({
-            name, code: mod.code, procs: mod.procs, relocs: mod.relocs,
-            globs: mod.globs, globalsCount: mod.globalsCount,
-          });
-          for (const p of mod.procs) {
-            if (p.kind !== 'proc' || this.procs.has(p.name)) continue;
-            this.procs.set(p.name, { name: p.name, args: p.args, of: null, binary: true });
-            this.binaryProcs.add(p.name);
-          }
-        }
+        this.registerBinaryModule(mod, name, opts);
       }
     }
     // pass 1: collect global declarations
@@ -180,6 +137,63 @@ export class Sem {
       this.errors.push({ line: 0, msg: 'no PROC main() and not OPT MODULE' });
     }
     return this;
+  }
+
+  // Register a resolved binary (.m) module: its consts, objects (incl. binary
+  // class metadata for vtable dispatch), library bases, and linked code. Then
+  // transitively pull in the modules it references via MODINFO — cross-module
+  // class inheritance (a child class's builder calls its parent's builder, in
+  // another module). The closure is what codegen blobs + binds.
+  registerBinaryModule(mod, name, opts) {
+    this._binLoaded = this._binLoaded ?? new Set();
+    if (this._binLoaded.has(name)) return;
+    this._binLoaded.add(name);
+
+    for (const [k, v] of mod.consts) this.consts.set(k, v);
+    for (const [k, obj] of mod.objects) {
+      const members = new Map();
+      for (const [mn, m] of obj.members) members.set(mn, { offset: m.offset, size: m.val || 0, type: null });
+      if (!this.objects.has(k)) this.objects.set(k, { name: k, of: null, members, size: obj.size });
+      if (mod.isCodeModule && obj.methods && obj.methods.length && !this.binaryClasses?.has(k)) {
+        this.binaryClasses = this.binaryClasses ?? new Map();
+        const methods = new Map();
+        for (const me of obj.methods) methods.set(me.name, { slot: me.slot ?? me.offset, args: me.args, kind: me.kind });
+        this.binaryClasses.set(k, {
+          name: k, module: name, osize: obj.size, delsize: obj.delsize,
+          delcode: obj.delcode, odestr: obj.odestr, methods,
+          ctorSlot: methods.get(k)?.slot ?? null,
+        });
+      }
+    }
+    if (mod.lib) {
+      this.libBases.set(mod.lib.basename, mod.lib.libname);
+      this.globals.set(mod.lib.basename, {});
+      for (const f of mod.lib.funcs) {
+        if (!f.name) continue;
+        this.libfuncs.set(f.name, { offset: f.offset, regs: f.regs, base: mod.lib.basename });
+      }
+    }
+    if (mod.isCodeModule && mod.code) {
+      this.binaryModules = this.binaryModules ?? [];
+      this.binaryProcs = this.binaryProcs ?? new Set();
+      this.binaryModules.push({
+        name, code: mod.code, procs: mod.procs, relocs: mod.relocs,
+        globs: mod.globs, globalsCount: mod.globalsCount, modinfo: mod.modinfo,
+      });
+      for (const p of mod.procs) {
+        if (p.kind !== 'proc' || this.procs.has(p.name)) continue;
+        this.procs.set(p.name, { name: p.name, args: p.args, of: null, binary: true });
+        this.binaryProcs.add(p.name);
+      }
+      // transitively link the modules referenced via MODINFO (parent classes)
+      for (const mi of mod.modinfo ?? []) {
+        const sub = mi.submodule.replace(/^emodules:/, '').replace(/\.m$/, '');
+        if (this._binLoaded.has(sub)) continue;
+        const parent = opts.resolveModule?.(sub);
+        if (parent && !parent.sourceProgram) this.registerBinaryModule(parent, sub, opts);
+        else if (!parent) this.warn(null, `MODINFO: cannot resolve parent module '${sub}' (for ${name})`);
+      }
+    }
   }
 
   defConst(name, value) {
