@@ -163,7 +163,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/copylist
 - [x] `RUN-OK` tools/ctype (is*/toupper/tolower identical to EC)
 - [ ] `RUN?  ` tools/exceptions
-- [ ] `RUN?  ` tools/file
+- [ ] `BUG   ` tools/file — readfile() throws "OPEN" under ecomp where EC reads the file fine (plain dos Open works, so it is the module path: FileLength ifunc thunk suspected — Lock/Examine/fib_Size). Real bug, needs focused trace of the FileLength thunk return value vs EC.
 - [ ] `RUN?  ` tools/filledvector
 - [ ] `RUN?  ` tools/ghost
 - [ ] `RUN?  ` tools/ilbm
@@ -171,7 +171,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/installhook
 - [ ] `RUN?  ` tools/iterators
 - [ ] `RUN?  ` tools/lisp
-- [ ] `RUN?  ` tools/longreal
+- [ ] `NOTE  ` tools/longreal — links+runs, but needs REAL mathieeedoub libraries to verify; under faked libs both EC and ecomp get 0 (IEEEDP* return 0), with a minor dFormat formatting artifact. Re-verify with real-Kickstart-libs harness.
 - [ ] `RUN?  ` tools/longrealtiny
 - [ ] `RUN?  ` tools/macros
 - [ ] `RUN?  ` tools/muicustomclass
