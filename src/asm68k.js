@@ -37,6 +37,10 @@ export class Asm {
   // register a 32-bit PC-relative fixup at an existing offset (a module's
   // ifunc call site, patched jsr.l -> bsr.l into a runtime thunk)
   bsr32At(offset, label) { this.fixups.push({ at: offset, label, kind: 'bsr32' }); }
+  // bind the 32-bit operand of an existing `jsr xxx.L` (at `offset`) to a label's
+  // absolute hunk address + emit a HUNK_RELOC32. 68000-safe (unlike bsr.L), used
+  // to bind a linked binary module's ifunc/cross-module `jsr abs.L $0` sites.
+  abs32At(offset, label) { this.fixups.push({ at: offset, label, kind: 'abs32' }); }
   // jsr to an absolute long address resolved from a label; emits a reloc so the
   // loader rebases it. Reaches anywhere in the hunk (unlike the ±32KB bsr).
   jsr_abs(label) {
@@ -90,6 +94,7 @@ export class Asm {
   subql_a(q, an) { this.w16(0x5188 | (q === 8 ? 0 : q) << 9 | an); }
   addal_imm(imm, an) { this.w16(0xd1fc | an << 9); this.w32(imm); }
   negl(dn) { this.w16(0x4480 | dn); }
+  notl_d(dn) { this.w16(0x4680 | dn); }   // not.l Dn (used to toggle a sign flag)
   notl(dn) { this.w16(0x4680 | dn); }
   extw(dn) { this.w16(0x4880 | dn); }
   extl(dn) { this.w16(0x48c0 | dn); }

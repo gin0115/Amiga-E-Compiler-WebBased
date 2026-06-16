@@ -232,12 +232,12 @@ export class Codegen {
           a.bytes[at + 3] = nv & 0xff;
           a.reloc32At(at);
         } else if (r.kind === 'ifunc') {
-          // patch the placeholder `jsr abs.L` (0x4EB9) to `bsr.L` (0x61FF) into
-          // the runtime thunk; the 32-bit operand becomes a PC-relative disp.
-          const op = base + r.offset - 2;
-          a.bytes[op] = 0x61;
-          a.bytes[op + 1] = 0xff;
-          a.bsr32At(base + r.offset, `ifunc_${norm(ifuncName(r.ifuncNum))}`);
+          // The placeholder is `jsr abs.L $0` (0x4EB9). Keep that opcode — it's
+          // 68000-safe — and bind its 32-bit operand to the runtime thunk's
+          // absolute address with a HUNK_RELOC32. (Rewriting to bsr.L / 0x61FF
+          // would be a 68020-only instruction, so ecomp output would crash on a
+          // plain 68000 where EC's does not.)
+          a.abs32At(base + r.offset, `ifunc_${norm(ifuncName(r.ifuncNum))}`);
         }
       }
       // bind external-global refs: patch each A4-relative displacement to the
@@ -282,9 +282,9 @@ export class Codegen {
           for (const r of mi.refs) {
             const op = base + r.coff - 2;
             if (a.bytes[op] !== 0x4e || a.bytes[op + 1] !== 0xb9) continue;  // expect jsr abs.L
-            a.bytes[op] = 0x61;          // bsr.L
-            a.bytes[op + 1] = 0xff;
-            a.bsr32At(base + r.coff, `proc_${mi.symbol}`);
+            // keep `jsr abs.L` (68000-safe); bind its operand to proc_<symbol>
+            // with a reloc, rather than rewriting to the 68020-only bsr.L.
+            a.abs32At(base + r.coff, `proc_${mi.symbol}`);
           }
           continue;
         }
@@ -294,11 +294,9 @@ export class Codegen {
           const op = base + r.coff - 2;
           if (a.bytes[op] === 0x4e && a.bytes[op + 1] === 0xb9) {
             // flavor 1 — `jsr abs.L $0` calling the parent class's descriptor
-            // BUILDER. coff is the 32-bit operand; patch the opcode to bsr.L and
-            // bind the displacement to the builder label.
-            a.bytes[op] = 0x61;          // bsr.L
-            a.bytes[op + 1] = 0xff;
-            a.bsr32At(base + r.coff, target);
+            // BUILDER. Keep the 68000-safe jsr abs.L and bind its operand to the
+            // builder label with a reloc (not the 68020-only bsr.L).
+            a.abs32At(base + r.coff, target);
           } else {
             // flavor 2 — an instruction reading the parent class's descriptor
             // POINTER from a fixed A4 slot (e.g. `move.l ($0,A4),(A0)` when a
@@ -523,6 +521,39 @@ export class Codegen {
     a.label('__ud_skip');
     a.dbra(D3, '__ud_loop');
     a.movem_pop((1 << D2) | (1 << D3));
+    a.rts();
+
+    // __sdivmod: d0/d1 SIGNED -> quotient d0, remainder d1 (truncate toward
+    // zero; remainder takes the dividend's sign). 68000-safe wrapper around the
+    // unsigned __udivmod — used by the Mul/Div/Mod ifunc thunks instead of the
+    // 68020-only muls.l/divs.l, so ecomp output runs on a plain 68000 like EC's.
+    a.label('__sdivmod');
+    a.movel_d_push(D4);              // D4 = quotient-sign flag
+    a.movel_d_push(D5);              // D5 = remainder-sign flag (= dividend sign)
+    a.moveq(0, D4);
+    a.moveq(0, D5);
+    a.tstl(D0);
+    a.bcc(COND.PL, '__sd_dpos');     // dividend >= 0?
+    a.negl(D0);                      // abs(dividend)
+    a.moveq(-1, D4);                 // quotient negative so far
+    a.moveq(-1, D5);                 // remainder negative
+    a.label('__sd_dpos');
+    a.tstl(D1);
+    a.bcc(COND.PL, '__sd_npos');     // divisor >= 0?
+    a.negl(D1);                      // abs(divisor)
+    a.notl_d(D4);                    // toggle quotient sign
+    a.label('__sd_npos');
+    a.bsr('__udivmod');              // D0=quot, D1=rem (unsigned)
+    a.tstl(D4);
+    a.beq('__sd_q');
+    a.negl(D0);                      // apply quotient sign
+    a.label('__sd_q');
+    a.tstl(D5);
+    a.beq('__sd_done');
+    a.negl(D1);                      // apply remainder sign
+    a.label('__sd_done');
+    a.movel_pop_d(D5);
+    a.movel_pop_d(D4);
     a.rts();
 
     // __itoa: d0 -> decimal ascii at (a2)+
