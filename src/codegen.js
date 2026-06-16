@@ -251,6 +251,22 @@ export class Codegen {
           a.bytes[at + 1] = slot & 0xff;
         }
       }
+      // bind module-private global refs (GLOBS "drels"): each drel entry is ONE
+      // module-private global variable (e.g. amigalib/random's RNG seed). EC
+      // bakes all its refs with the same -516 placeholder displacement and
+      // relocates them to the variable's assigned global-area slot. Allocate a
+      // slot per drel entry (4 bytes — scalar LONG, the common case) and patch
+      // every ref's 16-bit A4 displacement to it. The slot lands in the zeroed
+      // __globals BSS, so the variable starts at 0 like EC's.
+      const drels = m.globs?.drels ?? [];
+      for (let j = 0; j < drels.length; j++) {
+        const slot = this.globalSlot(`__drel_${m.name}_${j}`);
+        for (const off of drels[j].refs) {
+          const at = base + off;
+          a.bytes[at] = (slot >> 8) & 0xff;
+          a.bytes[at + 1] = slot & 0xff;
+        }
+      }
       // bind cross-module class-inheritance refs (MODINFO): each ref site is a
       // placeholder `jsr abs.L $0` calling the parent class's descriptor-builder
       // in another linked module. Patch to `bsr.L` into moddescr_<parent>, like
