@@ -272,6 +272,22 @@ export class Codegen {
       // in another linked module. Patch to `bsr.L` into moddescr_<parent>, like
       // the ifunc relocs. (A class ref is to the parent's builder at delcode.)
       for (const mi of m.modinfo ?? []) {
+        // cross-module PROC reference: a module that calls a proc exported by
+        // another linked module (e.g. tools/simplelex calls tools/ctype's
+        // isalnum). The call site is a placeholder `jsr abs.L $0`; bind it to
+        // proc_<symbol> (resolved at finish(), like an ifunc thunk). Only bind
+        // procs we actually linked.
+        if (mi.kind === 'proc') {
+          if (!this.sem.binaryProcs?.has(mi.symbol)) continue;
+          for (const r of mi.refs) {
+            const op = base + r.coff - 2;
+            if (a.bytes[op] !== 0x4e || a.bytes[op + 1] !== 0xb9) continue;  // expect jsr abs.L
+            a.bytes[op] = 0x61;          // bsr.L
+            a.bytes[op + 1] = 0xff;
+            a.bsr32At(base + r.coff, `proc_${mi.symbol}`);
+          }
+          continue;
+        }
         if (!this.sem.binaryClasses?.has(mi.symbol)) continue;   // only class parents we linked
         const target = `moddescr_${mi.symbol}`;
         for (const r of mi.refs) {
