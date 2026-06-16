@@ -628,6 +628,7 @@ export class Codegen {
 
     // __format: core E format engine. a0=fmt, a1=args, a2=out; advances a2.
     a.label('__format');
+    a.movem_push(0x0f00);              // save D4-D7 (field-width scratch)
     a.label('__wf_loop');
     a.moveb_postinc_d(A0, D0);
     a.tstb(D0);
@@ -651,32 +652,147 @@ export class Codegen {
     a.bra('__wf_loop');
     // args are pushed LEFT-to-RIGHT (E evaluation order), so successive
     // arguments live at DESCENDING stack addresses: fetch then subtract
+    // \d[n] — decimal, zero-padded to MINIMUM width n (never truncated). A
+    // negative sign is printed first, then the magnitude is padded, matching
+    // EC: \d[6] of -42 -> "-000042".
     a.label('__wf_dec');
+    a.bsr('__wf_getwidth');            // D5 = field width (0 if no [n])
     a.movel_ind_d(A1, D0);
     a.subql_a(4, A1);
-    a.bsr('__itoa');
+    a.bcc(COND.PL, '__wf_dec_pos');    // value >= 0?
+    a.moveb_imm_postinc(45, A2);       // '-'
+    a.negl(D0);
+    a.label('__wf_dec_pos');
+    a.moveq(48, D4);                   // pad with '0'
+    a.bsr('__wf_decdigits');           // D6 = digit count (D0 preserved)
+    a.movel_dd(D6, D1);
+    a.bsr('__wf_padto');               // emit max(0, width-count) pad chars
+    a.bsr('__itoa');                   // render the magnitude
     a.bra('__wf_loop');
-    a.label('__wf_str');
+    // \h[n] — hex (uppercase), zero-padded to MINIMUM width n (never truncated).
+    a.label('__wf_hex');
+    a.bsr('__wf_getwidth');
     a.movel_ind_d(A1, D0);
     a.subql_a(4, A1);
-    a.movel_da(D0, A3);
-    a.label('__wf_strl');
+    a.moveq(48, D4);                   // pad with '0'
+    a.bsr('__wf_hexdigits');           // D6 = hex digit count (D0 preserved)
+    a.movel_dd(D6, D1);
+    a.bsr('__wf_padto');
+    a.bsr('__htoa');
+    a.bra('__wf_loop');
+    // \s[n] — string in a FIXED field of width n: space-padded (right-justified)
+    // if short, truncated to the first n chars if long. EC: \s[2] of 'hello' = "he".
+    a.label('__wf_str');
+    a.bsr('__wf_getwidth');
+    a.movel_ind_d(A1, D0);
+    a.subql_a(4, A1);
+    a.moveq(32, D4);                   // pad with space
+    a.movel_da(D0, A3);                // A3 = string
+    a.bsr('__wf_strlen_a3');           // D6 = length (A3 preserved)
+    a.movel_dd(D6, D1);
+    a.bsr('__wf_padto');               // emit max(0, width-len) spaces
+    a.movel_dd(D6, D1);                // chars to copy = len, unless...
+    a.tstl(D5);
+    a.beq('__wf_strc');                // no width -> copy whole string
+    a.cmpl_dd(D5, D6);                 // len - width
+    a.bcc(COND.LT, '__wf_strc');       // len < width -> copy len
+    a.movel_dd(D5, D1);                // else copy width chars (truncate)
+    a.label('__wf_strc');
+    a.tstl(D1);
+    a.bcc(COND.LE, '__wf_loop');       // copied enough -> next directive
     a.moveb_postinc_d(A3, D0);
-    a.tstb(D0);
-    a.beq('__wf_loop');
     a.moveb_d_postinc(D0, A2);
-    a.bra('__wf_strl');
+    a.subql(1, D1);
+    a.bra('__wf_strc');
     a.label('__wf_char');
     a.movel_ind_d(A1, D0);
     a.subql_a(4, A1);
     a.moveb_d_postinc(D0, A2);
     a.bra('__wf_loop');
-    a.label('__wf_hex');
-    a.movel_ind_d(A1, D0);
-    a.subql_a(4, A1);
-    a.bsr('__htoa');
-    a.bra('__wf_loop');
     a.label('__wf_done');
+    a.movem_pop(0x00f0);               // restore D4-D7
+    a.rts();
+
+    // ---- field-width helpers for \d[n] \h[n] \s[n] (shared by WriteF/StringF) ----
+    // __wf_getwidth: parse an optional [n] at (a0). D5 = width (0 if absent),
+    // a0 advanced past the spec. Clobbers D0/D1/D5.
+    a.label('__wf_getwidth');
+    a.moveq(0, D5);
+    a.moveb_postinc_d(A0, D0);
+    a.cmpib_imm(0x5b, D0);             // '['
+    a.beq('__gw_loop');
+    a.subql_a(1, A0);                  // not a width spec — put the char back
+    a.rts();
+    a.label('__gw_loop');
+    a.moveb_postinc_d(A0, D0);
+    a.cmpib_imm(0x5d, D0);             // ']'
+    a.beq('__gw_done');
+    a.movel_dd(D5, D1);                // D5 := D5*10 + digit
+    a.asll_imm(3, D5);
+    a.addl_dd(D1, D5);
+    a.addl_dd(D1, D5);
+    a.andil_imm(15, D0);               // '0'..'9' low nibble = digit value
+    a.addl_dd(D0, D5);
+    a.bra('__gw_loop');
+    a.label('__gw_done');
+    a.rts();
+    // __wf_padto: emit max(0, D5-D1) copies of pad char D4 to (a2). D0 preserved.
+    a.label('__wf_padto');
+    a.movel_dd(D5, D7);
+    a.subl_dd(D1, D7);                 // D7 = width - count
+    a.label('__pt_loop');
+    a.tstl(D7);
+    a.bcc(COND.LE, '__pt_done');
+    a.moveb_d_postinc(D4, A2);
+    a.subql(1, D7);
+    a.bra('__pt_loop');
+    a.label('__pt_done');
+    a.rts();
+    // __wf_decdigits: D6 = number of decimal digits in D0 (>=0); D0 preserved.
+    a.label('__wf_decdigits');
+    a.movel_d_push(D0);
+    a.moveq(1, D6);                    // at least one digit (covers 0)
+    a.tstl(D0);
+    a.beq('__dd_done');
+    a.moveq(0, D6);
+    a.label('__dd_loop');
+    a.tstl(D0);
+    a.beq('__dd_done');
+    a.moveq(10, D1);
+    a.bsr('__udivmod');               // D0 := D0/10
+    a.addql(1, D6);
+    a.bra('__dd_loop');
+    a.label('__dd_done');
+    a.movel_pop_d(D0);
+    a.rts();
+    // __wf_hexdigits: D6 = number of hex digits in unsigned D0; D0 preserved.
+    a.label('__wf_hexdigits');
+    a.movel_d_push(D0);
+    a.moveq(1, D6);
+    a.tstl(D0);
+    a.beq('__hd_done');
+    a.moveq(0, D6);
+    a.label('__hd_loop');
+    a.tstl(D0);
+    a.beq('__hd_done');
+    a.lsrl_imm(4, D0);                // unsigned >> 4
+    a.addql(1, D6);
+    a.bra('__hd_loop');
+    a.label('__hd_done');
+    a.movel_pop_d(D0);
+    a.rts();
+    // __wf_strlen_a3: D6 = length of C-string at A3; A3 preserved.
+    a.label('__wf_strlen_a3');
+    a.movel_a_push(A3);
+    a.moveq(0, D6);
+    a.label('__sla_loop');
+    a.moveb_postinc_d(A3, D0);
+    a.tstb(D0);
+    a.beq('__sla_done');
+    a.addql(1, D6);
+    a.bra('__sla_loop');
+    a.label('__sla_done');
+    a.movel_pop_a(A3);
     a.rts();
 
     // __writef: a0=fmt, a1=args — format to a stack buffer, Write(stdout)
