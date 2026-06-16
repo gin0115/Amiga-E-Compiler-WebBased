@@ -41,7 +41,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` amigalib/cx
 - [ ] `RUN?  ` amigalib/interrupts
 - [ ] `RUN?  ` amigalib/io
-- [ ] `RUN?  ` amigalib/lists
+- [x] `RUN-OK` amigalib/lists (newList inits MinList; identical to EC)
 - [ ] `RUN?  ` amigalib/ports
 - [x] `RUN-OK` amigalib/random (fixed: GLOBS drel binding — RNG seed; rangeRand identical to EC)
 - [ ] `RUN?  ` amigalib/time
@@ -109,7 +109,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` other/dll
 - [ ] `RUN?  ` other/ecode
 - [ ] `RUN?  ` other/fastinsert
-- [ ] `RUN?  ` other/initlist
+- [x] `RUN-OK` other/initlist (initList; identical to EC)
 - [ ] `RUN?  ` other/isdigit
 - [x] `RUN-OK` other/isidentifier (identical to EC)
 - [ ] `RUN?  ` other/lowerchar

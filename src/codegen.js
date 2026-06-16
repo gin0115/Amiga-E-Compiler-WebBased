@@ -1510,7 +1510,21 @@ export class Codegen {
         frame += 4;
         ctx.locals.set(v.name, -frame);
         if (v.type) ctx.types.set(v.name, v.type);
-        if (!v.size) continue;
+        if (!v.size) {
+          // inline OBJECT value local (e.g. DEF list:lh, not PTR TO lh): reserve
+          // the object's bytes on the frame; the slot holds its address (like a
+          // sized buffer), so `x` and `x.field` resolve to that storage. Without
+          // this `x` is an uninitialised pointer and writing through it (e.g.
+          // newList(list)) corrupts memory.
+          if (v.type?.base === 'OBJECT') {
+            const osz = this.sem.objects.get(v.type.name)?.size ?? 0;
+            if (osz > 0) {
+              frame += (osz + 1) & ~1;
+              inits.push({ buf: -frame, slot: ctx.locals.get(v.name), kind: 'OBJECT', count: 0 });
+            }
+          }
+          continue;
+        }
         // sized declarations get a frame buffer; the variable holds a
         // pointer to it, set up at procedure entry
         const count = this.sem.foldConst(v.size);
