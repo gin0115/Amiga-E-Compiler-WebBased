@@ -3008,17 +3008,34 @@ export class Codegen {
       return;
     }
     if (callee.kind === 'Var' && this.sem.procs.has(callee.name)) {
+      const procInfo = this.sem.procs.get(callee.name);
+      const isBin = this.sem.binaryProcs?.has(callee.name);
       for (const arg of e.args) {
         this.exp(arg, ctx);
         a.movel_d_push(D0);
       }
+      let pushed = e.args.length;
+      // A binary-module proc with default args reads ALL its declared params
+      // from fixed stack offsets, so the caller must push the default values for
+      // any omitted TRAILING args (the .m stores them as evaluated constants).
+      // Without this the stack misaligns and the callee reads garbage params.
+      if (isBin && procInfo.ndef && typeof procInfo.args === 'number') {
+        const declared = procInfo.args;
+        const nRequired = declared - procInfo.ndef;
+        for (let i = e.args.length; i < declared; i++) {
+          const dv = procInfo.defaults[i - nRequired] ?? 0;
+          a.movel_imm(dv, D0);
+          a.movel_d_push(D0);
+          pushed++;
+        }
+      }
       // binary-module procs live in an appended code blob, possibly >32KB
       // away, so call them absolute (with a reloc) rather than PC-relative bsr.
-      if (this.sem.binaryProcs?.has(callee.name)) a.jsr_abs(`proc_${callee.name}`);
+      if (isBin) a.jsr_abs(`proc_${callee.name}`);
       else a.bsr(`proc_${callee.name}`);
-      if (e.args.length) {
-        if (e.args.length <= 2) a.addql_a(4 * e.args.length, A7);
-        else a.addal_imm(4 * e.args.length, A7);
+      if (pushed) {
+        if (pushed <= 2) a.addql_a(4 * pushed, A7);
+        else a.addal_imm(4 * pushed, A7);
       }
       return;
     }

@@ -183,7 +183,8 @@ export class Sem {
       });
       for (const p of mod.procs) {
         if (p.kind !== 'proc' || this.procs.has(p.name)) continue;
-        this.procs.set(p.name, { name: p.name, args: p.args, of: null, binary: true });
+        this.procs.set(p.name, { name: p.name, args: p.args, of: null, binary: true,
+          ndef: p.ndef ?? 0, defaults: p.defaults ?? [] });
         this.binaryProcs.add(p.name);
       }
       // transitively link the modules referenced via MODINFO (parent classes)

@@ -163,7 +163,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/copylist
 - [x] `RUN-OK` tools/ctype (is*/toupper/tolower identical to EC)
 - [ ] `RUN?  ` tools/exceptions
-- [ ] `BUG   ` tools/file — readfile()/writefile() throw "OPEN" under ecomp where EC works. ROOT CAUSE FOUND: these procs take 3 args WITH DEFAULTS (readfile/3, writefile/3) but are called with fewer (readfile(\'data.txt\')). The emod reader (emod.js JOB_PROCS) reads the arg COUNT but DISCARDS the default values (`o += ndef*4`). At the call site ecomp pushes only the provided args, so the stack misaligns and the proc reads its params from the wrong offsets (FileLength got an empty filename -> Lock current dir -> fib_Size=0 -> Open fails). The FileLength thunk itself is byte-identical to EC and correct. FIX (high value — affects ALL binary procs with default args, incl. EasyGUI): (1) emod.js capture the ndef default longs into proc.defaults; (2) sem.js carry defaults on the proc record; (3) codegen push default values for omitted trailing args at binary-proc call sites (nRequired = args - ndef; args pushed left-to-right). TDD with tools/file readfile.
+- [x] `RUN-OK` tools/file (readfile/writefile/countstrings; fixed: binary-proc DEFAULT ARGS now captured+emitted — identical to EC)
 - [ ] `RUN?  ` tools/filledvector
 - [ ] `RUN?  ` tools/ghost
 - [ ] `RUN?  ` tools/ilbm

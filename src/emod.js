@@ -196,10 +196,14 @@ export function readEmod(buf, name = '<module>') {
             const args = uw();
             uw();                                // skip word
             const ndef = uw();
-            o += ndef * 4;                       // default values
+            // default values for the last `ndef` args (evaluated constants).
+            // The caller must push these for any omitted trailing args, else the
+            // callee reads its params from misaligned stack offsets.
+            const defaults = [];
+            for (let i = 0; i < ndef; i++) defaults.push(l());
             const extra = uw();
             o += extra;
-            out.procs.push({ name: pname, offset, kind: 'proc', args });
+            out.procs.push({ name: pname, offset, kind: 'proc', args, ndef, defaults });
           } else if (tag === 2) {
             out.procs.push({ name: pname, offset, kind: 'label', args: 0 });
           } else {
