@@ -177,7 +177,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/muicustomclass
 - [ ] `RUN?  ` tools/pt
 - [ ] `RUN?  ` tools/scrbuffer
-- [ ] `RUN?  ` tools/simplelex
+- [x] `RUN-OK` tools/simplelex (6 module-private globals + cross-module isalnum call; identical to EC)
 - [ ] `RUN?  ` tools/stack
 - [ ] `RUN?  ` tools/textlen
 - [ ] `RUN?  ` tools/trapguru
