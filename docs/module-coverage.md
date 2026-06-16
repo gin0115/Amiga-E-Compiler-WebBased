@@ -154,7 +154,7 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/EasyGUI_debug
 - [ ] `RUN?  ` tools/EasyGUI_lite
 - [ ] `RUN?  ` tools/EasyGUI_notag
-- [ ] `RUN?  ` tools/Vector
+- [x] `RUN-OK` tools/Vector (3D perspective projection init3d/vec3d; byte-identical to EC across view angles. polygon3d needs Line()/graphics. IDE gallery example 'vec3d')
 - [ ] `RUN?  ` tools/arexx
 - [ ] `RUN?  ` tools/async
 - [ ] `RUN?  ` tools/clonescreen
@@ -170,10 +170,10 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/inithook
 - [ ] `RUN?  ` tools/installhook
 - [x] `RUN-OK` tools/iterators (iterate_exec_list with E backtick code-quotation; identical to EC)
-- [ ] `RUN?  ` tools/lisp
+- [ ] `NOTE  ` tools/lisp — needs the E LISP-CELL ifunc thunks (Car/Cdr/Cons/Cell/FreeCells/Cell_removed). Car/Cdr are trivial (stack arg -> read 0(A0)/4(A0)) but Cons is a mark-sweep GC allocator pulling from CELLSFREE(A4=-112) with a Cell() pool (CELLSMEM A4=-108) + multi-element cons + GC; FastDisposeList too. Major feature (port the E lisp-cell GC from ECX ec68kifuncs.asm I_CELL/I_CONS/I_CAR/I_CDR). EC builds lisp examples fine; ecomp errors "intrinsics not yet ported: Cell_removed, Cdr, Cons".
 - [ ] `NOTE  ` tools/longreal — links+runs, but needs REAL mathieeedoub libraries to verify; under faked libs both EC and ecomp get 0 (IEEEDP* return 0), with a minor dFormat formatting artifact. Re-verify with real-Kickstart-libs harness.
 - [ ] `RUN?  ` tools/longrealtiny
-- [ ] `RUN?  ` tools/macros
+- [x] `RUN-OK` tools/macros (menunum/itemnum/subnum menu-number bit extraction; identical to EC. setdrpt needs a rastport. Surfaced the WriteF \h[n]/\d[n] field-width bug, now fixed)
 - [ ] `RUN?  ` tools/muicustomclass
 - [ ] `RUN?  ` tools/pt
 - [ ] `RUN?  ` tools/scrbuffer
@@ -227,7 +227,8 @@ skiptochar, simplelex, tools/file, isidentifier, skipnonwhite, skiptoedelim, bit
 
 Systemic linker/runtime bugs found+fixed via the sweep: class-descriptor table (PR #8),
 GLOBS drel binding (#9), cross-module proc calls (#11), binary-proc DEFAULT ARGS (#14),
-WriteF \h hex (#15).
+WriteF \h hex (#15), WriteF field-width \d[n]/\h[n]/\s[n] (zero-pad numerics, sign before
+magnitude, space-pad+truncate strings; \c takes no width — surfaced by tools/macros).
 
 REMAINING proc modules are mostly NOT cleanly verifiable under the faked-libs console
 harness — they need real hardware/libraries or complex exec setups:

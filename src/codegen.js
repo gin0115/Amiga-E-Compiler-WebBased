@@ -142,6 +142,18 @@ export class Codegen {
     this.emitData();
     if (this.errors.length) return null;
     const code = a.finish();
+    // diagnostics for verbose builds (ignored by callers that don't want them)
+    this.stats = {
+      codeBytes: code.length,
+      relocCount: a.relocs.length,
+      globalSize: this.globalSize,
+      modules: (this.sem.binaryModules ?? []).map(m => ({
+        name: m.name,
+        codeBytes: m.code ? m.code.length : 0,
+        procs: (m.procs ?? []).filter(p => p.kind !== 'label').length,
+        relocs: (m.relocs ?? []).length,
+      })),
+    };
     return writeHunk(code, a.relocs);
   }
 
@@ -232,12 +244,12 @@ export class Codegen {
           a.bytes[at + 3] = nv & 0xff;
           a.reloc32At(at);
         } else if (r.kind === 'ifunc') {
-          // patch the placeholder `jsr abs.L` (0x4EB9) to `bsr.L` (0x61FF) into
-          // the runtime thunk; the 32-bit operand becomes a PC-relative disp.
-          const op = base + r.offset - 2;
-          a.bytes[op] = 0x61;
-          a.bytes[op + 1] = 0xff;
-          a.bsr32At(base + r.offset, `ifunc_${norm(ifuncName(r.ifuncNum))}`);
+          // The placeholder is `jsr abs.L $0` (0x4EB9). Keep that opcode — it's
+          // 68000-safe — and bind its 32-bit operand to the runtime thunk's
+          // absolute address with a HUNK_RELOC32. (Rewriting to bsr.L / 0x61FF
+          // would be a 68020-only instruction, so ecomp output would crash on a
+          // plain 68000 where EC's does not.)
+          a.abs32At(base + r.offset, `ifunc_${norm(ifuncName(r.ifuncNum))}`);
         }
       }
       // bind external-global refs: patch each A4-relative displacement to the
@@ -282,9 +294,9 @@ export class Codegen {
           for (const r of mi.refs) {
             const op = base + r.coff - 2;
             if (a.bytes[op] !== 0x4e || a.bytes[op + 1] !== 0xb9) continue;  // expect jsr abs.L
-            a.bytes[op] = 0x61;          // bsr.L
-            a.bytes[op + 1] = 0xff;
-            a.bsr32At(base + r.coff, `proc_${mi.symbol}`);
+            // keep `jsr abs.L` (68000-safe); bind its operand to proc_<symbol>
+            // with a reloc, rather than rewriting to the 68020-only bsr.L.
+            a.abs32At(base + r.coff, `proc_${mi.symbol}`);
           }
           continue;
         }
@@ -294,11 +306,9 @@ export class Codegen {
           const op = base + r.coff - 2;
           if (a.bytes[op] === 0x4e && a.bytes[op + 1] === 0xb9) {
             // flavor 1 — `jsr abs.L $0` calling the parent class's descriptor
-            // BUILDER. coff is the 32-bit operand; patch the opcode to bsr.L and
-            // bind the displacement to the builder label.
-            a.bytes[op] = 0x61;          // bsr.L
-            a.bytes[op + 1] = 0xff;
-            a.bsr32At(base + r.coff, target);
+            // BUILDER. Keep the 68000-safe jsr abs.L and bind its operand to the
+            // builder label with a reloc (not the 68020-only bsr.L).
+            a.abs32At(base + r.coff, target);
           } else {
             // flavor 2 — an instruction reading the parent class's descriptor
             // POINTER from a fixed A4 slot (e.g. `move.l ($0,A4),(A0)` when a
@@ -525,6 +535,39 @@ export class Codegen {
     a.movem_pop((1 << D2) | (1 << D3));
     a.rts();
 
+    // __sdivmod: d0/d1 SIGNED -> quotient d0, remainder d1 (truncate toward
+    // zero; remainder takes the dividend's sign). 68000-safe wrapper around the
+    // unsigned __udivmod — used by the Mul/Div/Mod ifunc thunks instead of the
+    // 68020-only muls.l/divs.l, so ecomp output runs on a plain 68000 like EC's.
+    a.label('__sdivmod');
+    a.movel_d_push(D4);              // D4 = quotient-sign flag
+    a.movel_d_push(D5);              // D5 = remainder-sign flag (= dividend sign)
+    a.moveq(0, D4);
+    a.moveq(0, D5);
+    a.tstl(D0);
+    a.bcc(COND.PL, '__sd_dpos');     // dividend >= 0?
+    a.negl(D0);                      // abs(dividend)
+    a.moveq(-1, D4);                 // quotient negative so far
+    a.moveq(-1, D5);                 // remainder negative
+    a.label('__sd_dpos');
+    a.tstl(D1);
+    a.bcc(COND.PL, '__sd_npos');     // divisor >= 0?
+    a.negl(D1);                      // abs(divisor)
+    a.notl_d(D4);                    // toggle quotient sign
+    a.label('__sd_npos');
+    a.bsr('__udivmod');              // D0=quot, D1=rem (unsigned)
+    a.tstl(D4);
+    a.beq('__sd_q');
+    a.negl(D0);                      // apply quotient sign
+    a.label('__sd_q');
+    a.tstl(D5);
+    a.beq('__sd_done');
+    a.negl(D1);                      // apply remainder sign
+    a.label('__sd_done');
+    a.movel_pop_d(D5);
+    a.movel_pop_d(D4);
+    a.rts();
+
     // __itoa: d0 -> decimal ascii at (a2)+
     a.label('__itoa');
     a.movem_push((1 << (15 - D3)));
@@ -597,6 +640,7 @@ export class Codegen {
 
     // __format: core E format engine. a0=fmt, a1=args, a2=out; advances a2.
     a.label('__format');
+    a.movem_push(0x0f00);              // save D4-D7 (field-width scratch)
     a.label('__wf_loop');
     a.moveb_postinc_d(A0, D0);
     a.tstb(D0);
@@ -620,32 +664,147 @@ export class Codegen {
     a.bra('__wf_loop');
     // args are pushed LEFT-to-RIGHT (E evaluation order), so successive
     // arguments live at DESCENDING stack addresses: fetch then subtract
+    // \d[n] — decimal, zero-padded to MINIMUM width n (never truncated). A
+    // negative sign is printed first, then the magnitude is padded, matching
+    // EC: \d[6] of -42 -> "-000042".
     a.label('__wf_dec');
+    a.bsr('__wf_getwidth');            // D5 = field width (0 if no [n])
     a.movel_ind_d(A1, D0);
     a.subql_a(4, A1);
-    a.bsr('__itoa');
+    a.bcc(COND.PL, '__wf_dec_pos');    // value >= 0?
+    a.moveb_imm_postinc(45, A2);       // '-'
+    a.negl(D0);
+    a.label('__wf_dec_pos');
+    a.moveq(48, D4);                   // pad with '0'
+    a.bsr('__wf_decdigits');           // D6 = digit count (D0 preserved)
+    a.movel_dd(D6, D1);
+    a.bsr('__wf_padto');               // emit max(0, width-count) pad chars
+    a.bsr('__itoa');                   // render the magnitude
     a.bra('__wf_loop');
-    a.label('__wf_str');
+    // \h[n] — hex (uppercase), zero-padded to MINIMUM width n (never truncated).
+    a.label('__wf_hex');
+    a.bsr('__wf_getwidth');
     a.movel_ind_d(A1, D0);
     a.subql_a(4, A1);
-    a.movel_da(D0, A3);
-    a.label('__wf_strl');
+    a.moveq(48, D4);                   // pad with '0'
+    a.bsr('__wf_hexdigits');           // D6 = hex digit count (D0 preserved)
+    a.movel_dd(D6, D1);
+    a.bsr('__wf_padto');
+    a.bsr('__htoa');
+    a.bra('__wf_loop');
+    // \s[n] — string in a FIXED field of width n: space-padded (right-justified)
+    // if short, truncated to the first n chars if long. EC: \s[2] of 'hello' = "he".
+    a.label('__wf_str');
+    a.bsr('__wf_getwidth');
+    a.movel_ind_d(A1, D0);
+    a.subql_a(4, A1);
+    a.moveq(32, D4);                   // pad with space
+    a.movel_da(D0, A3);                // A3 = string
+    a.bsr('__wf_strlen_a3');           // D6 = length (A3 preserved)
+    a.movel_dd(D6, D1);
+    a.bsr('__wf_padto');               // emit max(0, width-len) spaces
+    a.movel_dd(D6, D1);                // chars to copy = len, unless...
+    a.tstl(D5);
+    a.beq('__wf_strc');                // no width -> copy whole string
+    a.cmpl_dd(D5, D6);                 // len - width
+    a.bcc(COND.LT, '__wf_strc');       // len < width -> copy len
+    a.movel_dd(D5, D1);                // else copy width chars (truncate)
+    a.label('__wf_strc');
+    a.tstl(D1);
+    a.bcc(COND.LE, '__wf_loop');       // copied enough -> next directive
     a.moveb_postinc_d(A3, D0);
-    a.tstb(D0);
-    a.beq('__wf_loop');
     a.moveb_d_postinc(D0, A2);
-    a.bra('__wf_strl');
+    a.subql(1, D1);
+    a.bra('__wf_strc');
     a.label('__wf_char');
     a.movel_ind_d(A1, D0);
     a.subql_a(4, A1);
     a.moveb_d_postinc(D0, A2);
     a.bra('__wf_loop');
-    a.label('__wf_hex');
-    a.movel_ind_d(A1, D0);
-    a.subql_a(4, A1);
-    a.bsr('__htoa');
-    a.bra('__wf_loop');
     a.label('__wf_done');
+    a.movem_pop(0x00f0);               // restore D4-D7
+    a.rts();
+
+    // ---- field-width helpers for \d[n] \h[n] \s[n] (shared by WriteF/StringF) ----
+    // __wf_getwidth: parse an optional [n] at (a0). D5 = width (0 if absent),
+    // a0 advanced past the spec. Clobbers D0/D1/D5.
+    a.label('__wf_getwidth');
+    a.moveq(0, D5);
+    a.moveb_postinc_d(A0, D0);
+    a.cmpib_imm(0x5b, D0);             // '['
+    a.beq('__gw_loop');
+    a.subql_a(1, A0);                  // not a width spec — put the char back
+    a.rts();
+    a.label('__gw_loop');
+    a.moveb_postinc_d(A0, D0);
+    a.cmpib_imm(0x5d, D0);             // ']'
+    a.beq('__gw_done');
+    a.movel_dd(D5, D1);                // D5 := D5*10 + digit
+    a.asll_imm(3, D5);
+    a.addl_dd(D1, D5);
+    a.addl_dd(D1, D5);
+    a.andil_imm(15, D0);               // '0'..'9' low nibble = digit value
+    a.addl_dd(D0, D5);
+    a.bra('__gw_loop');
+    a.label('__gw_done');
+    a.rts();
+    // __wf_padto: emit max(0, D5-D1) copies of pad char D4 to (a2). D0 preserved.
+    a.label('__wf_padto');
+    a.movel_dd(D5, D7);
+    a.subl_dd(D1, D7);                 // D7 = width - count
+    a.label('__pt_loop');
+    a.tstl(D7);
+    a.bcc(COND.LE, '__pt_done');
+    a.moveb_d_postinc(D4, A2);
+    a.subql(1, D7);
+    a.bra('__pt_loop');
+    a.label('__pt_done');
+    a.rts();
+    // __wf_decdigits: D6 = number of decimal digits in D0 (>=0); D0 preserved.
+    a.label('__wf_decdigits');
+    a.movel_d_push(D0);
+    a.moveq(1, D6);                    // at least one digit (covers 0)
+    a.tstl(D0);
+    a.beq('__dd_done');
+    a.moveq(0, D6);
+    a.label('__dd_loop');
+    a.tstl(D0);
+    a.beq('__dd_done');
+    a.moveq(10, D1);
+    a.bsr('__udivmod');               // D0 := D0/10
+    a.addql(1, D6);
+    a.bra('__dd_loop');
+    a.label('__dd_done');
+    a.movel_pop_d(D0);
+    a.rts();
+    // __wf_hexdigits: D6 = number of hex digits in unsigned D0; D0 preserved.
+    a.label('__wf_hexdigits');
+    a.movel_d_push(D0);
+    a.moveq(1, D6);
+    a.tstl(D0);
+    a.beq('__hd_done');
+    a.moveq(0, D6);
+    a.label('__hd_loop');
+    a.tstl(D0);
+    a.beq('__hd_done');
+    a.lsrl_imm(4, D0);                // unsigned >> 4
+    a.addql(1, D6);
+    a.bra('__hd_loop');
+    a.label('__hd_done');
+    a.movel_pop_d(D0);
+    a.rts();
+    // __wf_strlen_a3: D6 = length of C-string at A3; A3 preserved.
+    a.label('__wf_strlen_a3');
+    a.movel_a_push(A3);
+    a.moveq(0, D6);
+    a.label('__sla_loop');
+    a.moveb_postinc_d(A3, D0);
+    a.tstb(D0);
+    a.beq('__sla_done');
+    a.addql(1, D6);
+    a.bra('__sla_loop');
+    a.label('__sla_done');
+    a.movel_pop_a(A3);
     a.rts();
 
     // __writef: a0=fmt, a1=args — format to a stack buffer, Write(stdout)
@@ -1394,7 +1553,6 @@ export class Codegen {
 
     // __readstr: d0=fh, d1=estr → 0, or -1 when the file is exhausted
     {
-      const dosb = 4;
       a.label('__readstr');
       a.movel_dd(D0, D4);              // fh
       a.movel_da(D1, A3);              // estr
@@ -1404,7 +1562,7 @@ export class Codegen {
       a.moveq(0, D7);                  // eof flag
       a.label('__rl_loop');
       a.movel_dd(D4, D1);
-      a.movel_disp_a(dosb, A4, A6);
+      a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);   // dosbase (EC ABI slot)
       a.jsr_disp(-306, A6);            // FGetC
       a.moveq(-1, D1);
       a.cmpl_dd(D1, D0);
@@ -3138,5 +3296,5 @@ export class Codegen {
 export function compileProgram(program, sem) {
   const cg = new Codegen(sem);
   const bin = cg.compile(program);
-  return { bin, errors: cg.errors };
+  return { bin, errors: cg.errors, stats: cg.stats ?? null };
 }

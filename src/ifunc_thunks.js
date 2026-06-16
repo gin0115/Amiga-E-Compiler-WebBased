@@ -27,9 +27,9 @@ const wrap = (label, n) => a => {
 
 export const IFUNC_THUNKS = {
   // I_MUL: MOVE.L 8(A7),D0 / MOVE.L 4(A7),D1 / MULS.L D1,D0 / RTS
-  Mul(a) { a.movel_disp_d(8, A7, D0); a.movel_disp_d(4, A7, D1); a.mulsl_dd(D1, D0); a.rts(); },
-  // I_DIV: ... DIVS.L D1,D0 / RTS
-  Div(a) { a.movel_disp_d(8, A7, D0); a.movel_disp_d(4, A7, D1); a.divsl_dd(D1, D0); a.rts(); },
+  Mul(a) { a.movel_disp_d(8, A7, D0); a.movel_disp_d(4, A7, D1); a.jsr_abs('__mul32'); a.rts(); },
+  // I_DIV: a/b signed. 68000-safe via __sdivmod (D0=quotient).
+  Div(a) { a.movel_disp_d(8, A7, D0); a.movel_disp_d(4, A7, D1); a.jsr_abs('__sdivmod'); a.rts(); },
   // I_AND: MOVE.L 8(A7),D0 / AND.L 4(A7),D0 / RTS
   And(a) { a.movel_disp_d(8, A7, D0); a.movel_disp_d(4, A7, D1); a.andl_dd(D1, D0); a.rts(); },
   // I_OR
@@ -351,11 +351,11 @@ export const IFUNC_THUNKS = {
 
   // ---- more intrinsics, ported 1-for-1 from ec68kifuncs.asm ----
 
-  // I_MOD: a MOD b — 020 signed long divide; divsl_dd leaves the remainder in
-  // D0 (Dr=0), quotient in D1, so D0 = a mod b (matches ec68kifuncs LS version)
+  // I_MOD: a MOD b — 68000-safe via __sdivmod (D1=remainder); a mod b takes the
+  // dividend's sign (truncate toward zero), matching EC.
   Mod(a) {
-    a.movel_disp_d(8, A7, D1); a.movel_disp_d(4, A7, D0);
-    a.divsl_dd(D0, D1); a.rts();               // D1=a/b, D0=a mod b
+    a.movel_disp_d(8, A7, D0); a.movel_disp_d(4, A7, D1);
+    a.jsr_abs('__sdivmod'); a.movel_dd(D1, D0); a.rts();   // D0 = a mod b
   },
   // I_LINK: link a node's -8 field to another (list cell back-pointer)
   Link(a) {

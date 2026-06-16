@@ -12,9 +12,10 @@ import { compileProgram } from '../src/codegen.js';
 import { resolveModule, makeResolver } from './modules.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const BIN = join(root, 'research/extracted/amigae33a/E_v3.3a/Bin');
-const FULL_EC = join(root, 'research/strlen/ec33a/ec33a');
-const MODS = join(root, 'research/extracted/amigae33a/E_v3.3a/Modules.lha.x/Modules');
+// Oracle = the registered EC v3.3a: a directory containing the `EC` binary,
+// mounted as bin: and run as bin:EC. Modules come from ecomp's own set.
+const EC_DIR = join(root, '..', '..', 'amiga-e', 'research', 'extracted', 'ec33a', 'ec33a');
+const MODS = join(root, 'modules');
 const VAMOS = join(process.env.HOME, '.local/bin/vamos');
 const FAKE = '*.library=mode:fake,version:40+dos.library=mode:auto+exec.library=mode:auto+mathieeesingbas.library=mode:auto+mathieeesingtrans.library=mode:auto';
 
@@ -29,12 +30,12 @@ function vamos(args, timeoutMs = 60000) {
 function runOracle(work, src, aux) {
   if (aux) {
     writeFileSync(join(work, aux.file), aux.src, 'latin1');
-    vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${BIN}`, '-V', `fullec:${FULL_EC}`,
-      '-a', 'emodules:mods:', '--cwd', 'work:', 'fullec:ec', aux.file]);
+    vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${EC_DIR}`,
+      '-a', 'emodules:work:+mods:', '--cwd', 'work:', 'bin:EC', aux.file]);
   }
   writeFileSync(join(work, 'ref.e'), src, 'latin1');
-  vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${BIN}`, '-V', `fullec:${FULL_EC}`,
-    '-a', 'emodules:mods:', '--cwd', 'work:', 'fullec:ec', 'ref.e']);
+  vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${EC_DIR}`,
+    '-a', 'emodules:work:+mods:', '--cwd', 'work:', 'bin:EC', 'ref.e']);
   if (!existsSync(join(work, 'ref'))) return { ok: false, out: '<oracle compile failed>' };
   const r = vamos(['-q', '-O', FAKE, '-V', `work:${work}`, '--cwd', 'work:', 'work:ref']);
   return { ok: true, out: r.out };
@@ -198,13 +199,25 @@ const CASES = [
   ['strcmp', "PROC main()\n  WriteF('\\d \\d \\d\\n', StrCmp('abc','abc'), StrCmp('abc','abd'), StrCmp('abcdef','abcxyz',3))\nENDPROC"],
 ];
 
+// --emit=PATH snapshots the EC-oracle output for every case into a committed
+// goldens file, so the cases can be replayed against ecomp under vamos WITHOUT
+// the EC oracle (see test/e2e/run-golden.js). Run this whenever CASES changes.
+const EMIT = (process.argv.find(a => a.startsWith('--emit=')) ?? '').slice(7);
+
 let pass = 0, fail = 0;
 const failures = [];
+const goldens = [];
 for (let [name, src] of CASES) {
   const display = typeof name === 'object' ? name.n : name;
   const work = mkdtempSync(join(tmpdir(), 'ecomp-diff-'));
   const aux = typeof name === 'object' ? name.aux : null;
   const ref = runOracle(work, src, aux);
+  if (EMIT) {
+    if (ref.ok) { goldens.push({ name: display, src, aux, expected: ref.out }); console.log(`SNAP ${display}`); }
+    else { console.log(`SKIP ${display} (oracle could not build)`); }
+    rmSync(work, { recursive: true, force: true });
+    continue;
+  }
   const ours = runEcomp(work, src, aux);
   const ok = ref.ok && ours.ok && ref.out === ours.out;
   if (ok) { pass++; console.log(`PASS ${display}`); }
@@ -214,6 +227,11 @@ for (let [name, src] of CASES) {
     failures.push({ name: display, ref: ref.out, ours: ours.out });
   }
   rmSync(work, { recursive: true, force: true });
+}
+if (EMIT) {
+  writeFileSync(EMIT, JSON.stringify(goldens, null, 1), 'latin1');
+  console.log(`\nwrote ${goldens.length} EC-verified goldens to ${EMIT}`);
+  process.exit(0);
 }
 console.log(`\n${pass}/${pass + fail} differential tests passed`);
 for (const f of failures) {
