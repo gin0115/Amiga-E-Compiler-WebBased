@@ -3,7 +3,7 @@
 // dos.library FindResident bootcode, root block 880, one bitmap block,
 // then file/dir blocks allocated upward from 882.
 const BLOCKS = 1760, BSIZE = 512;
-const T_HEADER = 2, T_DATA = 8;
+const T_HEADER = 2, T_DATA = 8, T_LIST = 16;
 const ST_ROOT = 1, ST_USERDIR = 2, ST_FILE = -3;
 const HT_SIZE = 72, DATA_BYTES = 488;
 const ROOT = 880, BITMAP = 881;
@@ -100,32 +100,50 @@ export class AdfWriter {
     const nblocks = Math.ceil(data.length / DATA_BYTES) || 1;
     const dataBlocks = [];
     for (let i = 0; i < nblocks; i++) dataBlocks.push(this.alloc());
+    // A header/extension block holds at most HT_SIZE (72) data-block pointers;
+    // files larger than that chain the rest through file extension blocks.
+    const nExt = nblocks > HT_SIZE ? Math.ceil((nblocks - HT_SIZE) / HT_SIZE) : 0;
+    const extBlocks = [];
+    for (let i = 0; i < nExt; i++) extBlocks.push(this.alloc());
     for (let i = 0; i < nblocks; i++) {
       const db = dataBlocks[i];
       const chunk = data.subarray(i * DATA_BYTES, Math.min((i + 1) * DATA_BYTES, data.length));
       this.w32(db, 0, T_DATA);
-      this.w32(db, 1, header);
+      this.w32(db, 1, header);            // header_key = the file header (always)
       this.w32(db, 2, i + 1);
       this.w32(db, 3, chunk.length);
       this.w32(db, 4, i + 1 < nblocks ? dataBlocks[i + 1] : 0);
       this.img.set(chunk, db * BSIZE + 24);
       this.normalChecksum(db);
     }
+    // file header: first up-to-72 data pointers (table runs BACKWARDS from 77)
+    const inHeader = Math.min(nblocks, HT_SIZE);
     this.w32(header, 0, T_HEADER);
     this.w32(header, 1, header);
-    this.w32(header, 2, nblocks);
+    this.w32(header, 2, inHeader);        // high_seq: pointers in THIS block
     this.w32(header, 4, dataBlocks[0]);
-    // data block table runs BACKWARDS from long 77
-    for (let i = 0; i < Math.min(nblocks, HT_SIZE); i++) {
-      this.w32(header, 77 - i, dataBlocks[i]);
-    }
-    if (nblocks > HT_SIZE) throw new Error('file needs extension blocks (not implemented)');
-    this.w32(header, 81, data.length); // byte_size (+0x144)
+    for (let i = 0; i < inHeader; i++) this.w32(header, 77 - i, dataBlocks[i]);
+    this.w32(header, 81, data.length);    // byte_size (+0x144)
     this.setBcplName(header, 0x1b0, name);
     this.w32(header, 125, parent);
+    this.w32(header, 126, nExt ? extBlocks[0] : 0);  // extension (+0x1f8)
     this.w32(header, 127, ST_FILE >>> 0);
     this.insertEntry(parent, name, header);
     this.normalChecksum(header);
+    // file extension blocks: each chains up to 72 further data pointers
+    for (let e = 0; e < nExt; e++) {
+      const ext = extBlocks[e];
+      const start = HT_SIZE + e * HT_SIZE;
+      const cnt = Math.min(HT_SIZE, nblocks - start);
+      this.w32(ext, 0, T_LIST);
+      this.w32(ext, 1, ext);              // own block
+      this.w32(ext, 2, cnt);              // high_seq
+      for (let i = 0; i < cnt; i++) this.w32(ext, 77 - i, dataBlocks[start + i]);
+      this.w32(ext, 125, header);         // parent = the file header
+      this.w32(ext, 126, e + 1 < nExt ? extBlocks[e + 1] : 0);  // next extension
+      this.w32(ext, 127, ST_FILE >>> 0);
+      this.normalChecksum(ext);
+    }
     return header;
   }
 
