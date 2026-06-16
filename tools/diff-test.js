@@ -12,9 +12,10 @@ import { compileProgram } from '../src/codegen.js';
 import { resolveModule, makeResolver } from './modules.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const BIN = join(root, 'research/extracted/amigae33a/E_v3.3a/Bin');
-const FULL_EC = join(root, 'research/strlen/ec33a/ec33a');
-const MODS = join(root, 'research/extracted/amigae33a/E_v3.3a/Modules.lha.x/Modules');
+// Oracle = the registered EC v3.3a: a directory containing the `EC` binary,
+// mounted as bin: and run as bin:EC. Modules come from ecomp's own set.
+const EC_DIR = join(root, '..', '..', 'amiga-e', 'research', 'extracted', 'ec33a', 'ec33a');
+const MODS = join(root, 'modules');
 const VAMOS = join(process.env.HOME, '.local/bin/vamos');
 const FAKE = '*.library=mode:fake,version:40+dos.library=mode:auto+exec.library=mode:auto+mathieeesingbas.library=mode:auto+mathieeesingtrans.library=mode:auto';
 
@@ -29,12 +30,12 @@ function vamos(args, timeoutMs = 60000) {
 function runOracle(work, src, aux) {
   if (aux) {
     writeFileSync(join(work, aux.file), aux.src, 'latin1');
-    vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${BIN}`, '-V', `fullec:${FULL_EC}`,
-      '-a', 'emodules:mods:', '--cwd', 'work:', 'fullec:ec', aux.file]);
+    vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${EC_DIR}`,
+      '-a', 'emodules:work:+mods:', '--cwd', 'work:', 'bin:EC', aux.file]);
   }
   writeFileSync(join(work, 'ref.e'), src, 'latin1');
-  vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${BIN}`, '-V', `fullec:${FULL_EC}`,
-    '-a', 'emodules:mods:', '--cwd', 'work:', 'fullec:ec', 'ref.e']);
+  vamos(['-q', '-V', `work:${work}`, '-V', `mods:${MODS}`, '-V', `bin:${EC_DIR}`,
+    '-a', 'emodules:work:+mods:', '--cwd', 'work:', 'bin:EC', 'ref.e']);
   if (!existsSync(join(work, 'ref'))) return { ok: false, out: '<oracle compile failed>' };
   const r = vamos(['-q', '-O', FAKE, '-V', `work:${work}`, '--cwd', 'work:', 'work:ref']);
   return { ok: true, out: r.out };

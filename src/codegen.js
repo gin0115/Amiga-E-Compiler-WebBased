@@ -1394,7 +1394,6 @@ export class Codegen {
 
     // __readstr: d0=fh, d1=estr → 0, or -1 when the file is exhausted
     {
-      const dosb = 4;
       a.label('__readstr');
       a.movel_dd(D0, D4);              // fh
       a.movel_da(D1, A3);              // estr
@@ -1404,7 +1403,7 @@ export class Codegen {
       a.moveq(0, D7);                  // eof flag
       a.label('__rl_loop');
       a.movel_dd(D4, D1);
-      a.movel_disp_a(dosb, A4, A6);
+      a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);   // dosbase (EC ABI slot)
       a.jsr_disp(-306, A6);            // FGetC
       a.moveq(-1, D1);
       a.cmpl_dd(D1, D0);
