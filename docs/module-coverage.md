@@ -182,3 +182,23 @@ Updated continuously by the /loop sweep. 149 code modules.
 - [ ] `RUN?  ` tools/textlen
 - [ ] `RUN?  ` tools/trapguru
 
+
+---
+## DEEP BLOCKER: class-descriptor table (module-internal NEW)
+
+EC builds EVERY class descriptor at program STARTUP and stores each pointer at a
+fixed positive A4 slot (4,8,c,10,…, likely OID*4 where OID = object-struct
+offset 6). A class's methods that internally `NEW` sub-objects read the
+descriptor from its slot (baked into the .m — integer.m has zero GLOBS). ecomp
+builds descriptors lazily at the call site instead, so module-internal NEW reads
+empty slots and crashes (jsr through a null descriptor[slot]).
+
+Affects every class whose methods internally NEW: ALL 35 oomodules (after the
+cross-module-inheritance fix they now LINK with 0 unbound jsr $0, but crash on
+the first internal NEW) + the complex afc classes (StringNode, Displayer,
+Mousepointer, Worldbuilder, mgui, super_picture…).
+
+Fix (separate major effort): replicate EC's class→slot assignment (cross-module
+consistent) and emit a startup pass that builds every linked class's descriptor
+into its slot, so module-internal NEW finds it. Simple classes (Parser, stack,
+the synthetic shape/circle) don't internal-NEW, so they already work.
