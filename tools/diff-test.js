@@ -199,13 +199,25 @@ const CASES = [
   ['strcmp', "PROC main()\n  WriteF('\\d \\d \\d\\n', StrCmp('abc','abc'), StrCmp('abc','abd'), StrCmp('abcdef','abcxyz',3))\nENDPROC"],
 ];
 
+// --emit=PATH snapshots the EC-oracle output for every case into a committed
+// goldens file, so the cases can be replayed against ecomp under vamos WITHOUT
+// the EC oracle (see test/e2e/run-golden.js). Run this whenever CASES changes.
+const EMIT = (process.argv.find(a => a.startsWith('--emit=')) ?? '').slice(7);
+
 let pass = 0, fail = 0;
 const failures = [];
+const goldens = [];
 for (let [name, src] of CASES) {
   const display = typeof name === 'object' ? name.n : name;
   const work = mkdtempSync(join(tmpdir(), 'ecomp-diff-'));
   const aux = typeof name === 'object' ? name.aux : null;
   const ref = runOracle(work, src, aux);
+  if (EMIT) {
+    if (ref.ok) { goldens.push({ name: display, src, aux, expected: ref.out }); console.log(`SNAP ${display}`); }
+    else { console.log(`SKIP ${display} (oracle could not build)`); }
+    rmSync(work, { recursive: true, force: true });
+    continue;
+  }
   const ours = runEcomp(work, src, aux);
   const ok = ref.ok && ours.ok && ref.out === ours.out;
   if (ok) { pass++; console.log(`PASS ${display}`); }
@@ -215,6 +227,11 @@ for (let [name, src] of CASES) {
     failures.push({ name: display, ref: ref.out, ours: ours.out });
   }
   rmSync(work, { recursive: true, force: true });
+}
+if (EMIT) {
+  writeFileSync(EMIT, JSON.stringify(goldens, null, 1), 'latin1');
+  console.log(`\nwrote ${goldens.length} EC-verified goldens to ${EMIT}`);
+  process.exit(0);
 }
 console.log(`\n${pass}/${pass + fail} differential tests passed`);
 for (const f of failures) {
