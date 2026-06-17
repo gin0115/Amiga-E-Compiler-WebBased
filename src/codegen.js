@@ -664,9 +664,14 @@ export class Codegen {
     a.bne('__wf_lit');
     a.moveb_postinc_d(A0, D0);
     a.tstb(D0);
-    a.beq('__wf_done');
+    a.bne('__wf_code');
+    a.moveb_imm_postinc(0x5c, A2);     // trailing '\' -> emit it literally
+    a.bra('__wf_done');
+    a.label('__wf_code');
     a.cmpib_imm(100, D0);              // 'd'
     a.beq('__wf_dec');
+    a.cmpib_imm(117, D0);              // 'u' — unsigned decimal
+    a.beq('__wf_unsigned');
     a.cmpib_imm(115, D0);              // 's'
     a.beq('__wf_str');
     a.cmpib_imm(99, D0);               // 'c'
@@ -695,6 +700,29 @@ export class Codegen {
     a.movel_dd(D6, D1);
     a.bsr('__wf_padto');               // emit max(0, width-count) pad chars
     a.bsr('__itoa');                   // render the magnitude
+    a.bra('__wf_loop');
+    // \u[n] — UNSIGNED decimal (0..4294967295), zero-padded to min width n.
+    a.label('__wf_unsigned');
+    a.bsr('__wf_getwidth');            // D5 = field width
+    a.movel_ind_d(A1, D0);             // value (unsigned)
+    a.subql_a(4, A1);
+    a.moveq(0, D6);                    // digit count
+    a.label('__wfu_div');
+    a.moveq(10, D1);
+    a.bsr('__udivmod');                // D0 = quotient, D1 = remainder (0-9)
+    a.movel_d_push(D1);                // stack the remainder
+    a.addql(1, D6);
+    a.tstl(D0);
+    a.bne('__wfu_div');
+    a.movel_dd(D6, D1);                // pad to width with leading '0'
+    a.moveq(48, D4);
+    a.bsr('__wf_padto');
+    a.label('__wfu_emit');
+    a.movel_pop_d(D1);                 // remainder, emit reversed
+    a.moveq(48, D0); a.addl_dd(D0, D1);
+    a.moveb_d_postinc(D1, A2);
+    a.subql(1, D6);
+    a.bne('__wfu_emit');
     a.bra('__wf_loop');
     // \h[n] — hex (uppercase), zero-padded to MINIMUM width n (never truncated).
     a.label('__wf_hex');
