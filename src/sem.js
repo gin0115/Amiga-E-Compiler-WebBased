@@ -337,6 +337,7 @@ export class Sem {
         break;
       case 'Repeat': this.checkExp(s.cond, scope, p); walk(s.body); break;
       case 'Loop': walk(s.body); break;
+      case 'Try': walk(s.body); walk(s.catch); break;   // E-VO block exceptions
       case 'Select':
         this.checkExp(s.subject, scope, p);
         if (s.of) this.checkExp(s.of, scope, p);

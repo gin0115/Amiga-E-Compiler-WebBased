@@ -454,6 +454,7 @@ class Parser {
       switch (t.value) {
         case 'DEF': return this.parseDef(false);
         case 'IF': case 'IFN': return this.parseIf();
+        case 'TRY': return this.parseTry();   // E-VO block-scoped exceptions
         case 'FOR': return this.parseFor();
         case 'WHILE': case 'WHILEN': return this.parseWhile();
         case 'REPEAT': return this.parseRepeat();
@@ -710,6 +711,18 @@ class Parser {
     const cond = this.parseExp();
     this.expectNl();
     return { kind: 'Repeat', body, cond, neg };
+  }
+
+  parseTry() {   // E-VO: TRY <body> CATCH <handler> ENDTRY
+    this.next();
+    this.expectNl();
+    const body = this.parseStats(['CATCH', 'ENDTRY']);
+    this.expect('kw', 'CATCH');
+    this.expectNl();
+    const handler = this.parseStats(['ENDTRY']);
+    this.expect('kw', 'ENDTRY');
+    this.expectNl();
+    return { kind: 'Try', body, catch: handler };
   }
 
   parseLoop() {

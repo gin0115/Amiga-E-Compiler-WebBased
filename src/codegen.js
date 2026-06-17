@@ -85,6 +85,7 @@ export class Codegen {
 
   compile(program) {
     const a = this.a;
+    this.program = program;
     if ((program.opts ?? []).some(o => /^MODULE/.test(o))) {
       this.err(null, 'OPT MODULE sources produce no executable (module output not yet supported)');
       return null;
@@ -1661,6 +1662,21 @@ export class Codegen {
       a.label(lst.label);        // the list pointer aims here
       a.space(lst.bytes);
     }
+    // Top-level static data: labels (lp:) and LONG/INT/CHAR data declarations.
+    for (const d of [...this.program.decls, ...(this.sem.importedDecls ?? [])]) {
+      if (d.kind === 'Label') {
+        a.label(`user_${d.name}`);
+      } else if (d.kind === 'Data') {
+        const sz = d.type === 'CHAR' ? 1 : d.type === 'INT' ? 2 : 4;
+        if (sz > 1) a.align();
+        for (const v of d.values) {
+          const n = this.sem.foldConst(v) ?? 0;
+          if (sz === 1) a.w8(n & 0xff);
+          else if (sz === 2) a.w16(n & 0xffff);
+          else a.w32(n >>> 0);
+        }
+      }
+    }
     a.align();
     a.label('__globals');
     // A4 = __globals + A4_ORIGIN; standard globals occupy [origin-96, origin),
@@ -2156,6 +2172,33 @@ export class Codegen {
         a.label(end);
         ctx.loopEnds.pop();
         ctx.loopConts.pop();
+        break;
+      }
+      case 'Try': {
+        // E-VO block-scoped exceptions. Push a {prev,sp,fp,resume-pc} handler
+        // frame (same shape __raise unwinds to) on the stack for the TRY body;
+        // a Throw/Raise inside it jumps to the CATCH block.
+        const catchL = this.uniq('catch'), end = this.uniq('endtry');
+        a.lea_disp(-16, A7, A7);              // reserve the frame at A7
+        a.movel_aa(A7, A0);                   // A0 = &frame
+        a.movel_disp_d(28, A4, D0);
+        a.movel_d_ind(D0, A0);                // prev@0 = old chain head
+        a.movel_a_disp(A7, 4, A0);            // sp@4  = A7 (&frame)
+        a.movel_a_disp(A5, 8, A0);            // fp@8
+        a.lea_pc(catchL, A1);
+        a.movel_a_disp(A1, 12, A0);           // resume-pc@12
+        a.movel_a_disp(A0, 28, A4);           // chain head = &frame
+        for (const st of s.body) this.stat(st, ctx);
+        a.movel_ind_d(A7, D0);                // unlink: head = prev (A7=&frame)
+        a.movel_d_disp(D0, 28, A4);
+        a.lea_disp(16, A7, A7);               // pop frame
+        a.bra(end);
+        a.label(catchL);                      // entered via __raise: A7=&frame, A5 restored
+        a.movel_ind_d(A7, D0);
+        a.movel_d_disp(D0, 28, A4);           // unlink
+        a.lea_disp(16, A7, A7);               // pop frame
+        for (const st of s.catch) this.stat(st, ctx);
+        a.label(end);
         break;
       }
       case 'Loop': {

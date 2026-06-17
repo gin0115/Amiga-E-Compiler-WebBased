@@ -13,4 +13,6 @@ export const EVO_KEYWORDS = [
   'PSIZEOF', 'ARRAYSIZE', 'OFFSETOF',
   // object unions
   'UNION', 'ENDUNION',
+  // block-scoped exception handling
+  'TRY', 'CATCH', 'ENDTRY',
 ];

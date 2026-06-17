@@ -37,9 +37,10 @@ test('memory via address registers', a => {
   a.equal(bytes(x => x.movel_absw_a(4, A6)), '2c 78 00 04');
 });
 
-test('lea PC-relative with fixup', a => {
-  // lea str(pc),a1 where str follows immediately: disp = 2 (from ext word)
-  a.equal(bytes(x => { x.lea_pc('s', A1); x.label('s'); x.ascii('AB'); }), '43 fa 00 02 41 42');
+test('lea absolute-long with fixup (far-reach)', a => {
+  // lea s.L,a1 — absolute long (43 f9) + 32-bit address resolved to s's hunk
+  // offset (6, just after the 6-byte instruction). Reaches the whole hunk.
+  a.equal(bytes(x => { x.lea_pc('s', A1); x.label('s'); x.ascii('AB'); }), '43 f9 00 00 00 06 41 42');
 });
 
 test('arithmetic', a => {
