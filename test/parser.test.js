@@ -116,9 +116,9 @@ test('typed lists, nested lists, lisp cells', a => {
 
 test('E-VO unary NOT and ~ (bitwise complement)', a => {
   const p = ok('PROC main()\n  DEF x\n  x:=NOT $00\n  x:=~x\n  IF NOT x THEN x:=1\nENDPROC');
-  const b = p.procs[0].body;
-  a.equal(b[0].exp.kind, 'Not');   // NOT $00
-  a.equal(b[1].exp.kind, 'Not');   // ~x
+  const b = p.procs[0].body;   // b[0] is the DEF
+  a.equal(b[1].exp.kind, 'Not');   // NOT $00
+  a.equal(b[2].exp.kind, 'Not');   // ~x
 });
 
 test('NEW expression and statement forms', a => {
