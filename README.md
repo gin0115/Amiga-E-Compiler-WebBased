@@ -158,6 +158,26 @@ Everything in the E v3.3a manual, including the famous corners:
   auto-free at exit
 - 100+ builtins, the dos/exec call surface, `CleanUp`, `CtrlC`, `Rnd`…
 
+## E-VO support (modern Amiga E) — opt-in
+
+Beyond classic EC v3.3a, ecomp has an **optional E-VO extension** (Darren
+Coles' modern Amiga E), enabled with an `evo` flag and contained entirely in
+`src/evo/`. With the flag off (default) ecomp is faithful EC v3.3a; with it on
+it accepts modern E as a strict superset — `//` comments, `<<`/`>>`, `NOT`/`~`,
+compound assignment, `ANDALSO`/`ORELSE`, `IFN`/`WHILEN`/`ELSEWHILE`/`ALWAYS`/…,
+ternary `?:`, swap `:=:`, `==` quick-compare, multi-dim arrays, `UNION`,
+`NEW objtype.ctor()`, `TRY`/`CATCH`, `BYTE`/`WORD` types, `PSIZEOF`/`ARRAYSIZE`/
+`OFFSETOF`, and the E-VO standard library (List/String/Astr/Mem families).
+
+Validated against the real **E-VO compiler** (assembled from `E-VO.S` and run
+under vamos as a third oracle): E-VO's own 741-test `unittests.e`, compiled by
+ecomp in evo mode, runs to completion with **732 pass / 9 fail** vs EVO's own
+**731 / 10** (the 9 are vamos-environment quirks EVO also fails). Native EC mode
+is byte-identical with the flag on or off (115/115 differential still green).
+
+See **[docs/evo-support.md](docs/evo-support.md)** for the full feature list,
+the `src/evo/` architecture, and the three-compiler validation.
+
 ## Linking precompiled binary modules (EasyGUI, afc/*, oomodules/*, …)
 
 ecomp doesn't just read a module's *interface* — it **links the actual 68K
