@@ -114,6 +114,13 @@ test('typed lists, nested lists, lisp cells', a => {
   a.equal(cell.tail.kind, 'Cell');
 });
 
+test('E-VO unary NOT and ~ (bitwise complement)', a => {
+  const p = ok('PROC main()\n  DEF x\n  x:=NOT $00\n  x:=~x\n  IF NOT x THEN x:=1\nENDPROC');
+  const b = p.procs[0].body;
+  a.equal(b[0].exp.kind, 'Not');   // NOT $00
+  a.equal(b[1].exp.kind, 'Not');   // ~x
+});
+
 test('NEW expression and statement forms', a => {
   ok('PROC main()\n  DEF p:PTR TO obj, q\n  NEW p\n  NEW p[10]\n  NEW p.create(), q\n  q:=NEW [1,2,3]:obj\n  END p\n  END p[10], q\nENDPROC');
 });

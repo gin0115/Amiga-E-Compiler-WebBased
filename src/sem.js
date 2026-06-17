@@ -231,6 +231,7 @@ export class Sem {
       case 'Float': return e.value;
       case 'Nil': return 0;
       case 'Neg': { const v = this.foldConst(e.exp); return v === null ? null : -v | 0; }
+      case 'Not': { const v = this.foldConst(e.exp); return v === null ? null : ~v | 0; }
       case 'Var': {
         if (this.consts.has(e.name)) return this.consts.get(e.name);
         return null;

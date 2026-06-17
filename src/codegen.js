@@ -2416,6 +2416,8 @@ export class Codegen {
           break;
         }
         this.exp(e.exp, ctx); a.negl(D0); break;
+      case 'Not':   // E-VO unary bitwise complement (NOT x / ~x)
+        this.exp(e.exp, ctx); a.notl(D0); break;
       case 'Bin': case 'FloatConv': case 'FloatPrefix':
         this.fchain(e, ctx, { f: false });
         break;

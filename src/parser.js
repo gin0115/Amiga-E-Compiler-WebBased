@@ -705,18 +705,24 @@ class Parser {
   atItemStart() {
     const t = this.peek();
     return ['int', 'float', 'str', 'char', 'ident', 'ecall', 'upper',
-      '(', '[', '{', '`', '^', '-', '<'].includes(t.type) ||
+      '(', '[', '{', '`', '^', '-', '~', '<'].includes(t.type) ||
       (t.type === 'kw' && ['IF', 'SIZEOF', 'NEW', 'NIL', 'SUPER'].includes(t.value));
   }
 
   parseItem() {
     const t = this.peek();
+    // E-VO / modern E: unary bitwise complement — 'NOT x' or '~x'.
+    if (t.type === 'upper' && t.value === 'NOT') {
+      this.next();
+      return { kind: 'Not', exp: this.parseItem() };
+    }
     switch (t.type) {
       case 'int': case 'float': this.next(); return { kind: t.type === 'int' ? 'Num' : 'Float', value: t.value };
       case 'str': this.next(); return { kind: 'Str', value: t.value };
       case 'char': this.next(); return { kind: 'Char', value: t.value };
       case '-': this.next(); return { kind: 'Neg', exp: this.parseItem() };
       case '!': this.next(); return { kind: 'FloatPrefix', exp: this.parseItem() };
+      case '~': this.next(); return { kind: 'Not', exp: this.parseItem() };
       case '(': {
         this.next();
         this.skipNl();
