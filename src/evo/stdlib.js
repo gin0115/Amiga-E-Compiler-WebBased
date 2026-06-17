@@ -204,9 +204,10 @@ ENDPROC d
 
 -> ===== Astr family ===== (plain char arrays, no estring header)
 
-PROC AstrCopy(d:PTR TO CHAR, s:PTR TO CHAR)
-  DEF i=0
-  WHILE s[i]
+PROC AstrCopy(d:PTR TO CHAR, s:PTR TO CHAR, n=-1)
+  DEF i=0, lim
+  lim:=n-1            -> n counts the NUL terminator
+  WHILE s[i] AND ((n=-1) OR (i<lim))
     d[i]:=s[i]; i:=i+1
   ENDWHILE
   d[i]:=0

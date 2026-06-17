@@ -1904,6 +1904,17 @@ export class Codegen {
       return 4;
     }
     if (e.kind === 'Index') {
+      // multi-dim array (m[i][j]...): a full index yields an element whose size
+      // is the array's element type (typeOf doesn't track it through the chain).
+      const idxs = []; let n = e;
+      while (n.kind === 'Index' && n.idx) { idxs.unshift(n.idx); n = n.obj; }
+      if (n.kind === 'Var') {
+        const dims = this.arrayDimsOf(n.name, ctx);
+        if (dims && dims.length >= 2 && idxs.length >= dims.length) {
+          const vt = ctx.types.get(n.name) ?? this.globalTypes.get(n.name);
+          return typeSize(vt?.of);
+        }
+      }
       const t = this.typeOf(e, ctx);
       if (t?.base === 'CHAR') return 1;
       if (t?.base === 'INT') return 2;
