@@ -2563,6 +2563,15 @@ export class Codegen {
       }
       case 'Var': {
         if (e.refType === 'upper') {
+          // E-VO: a CPU register name used as an expression value (its current
+          // contents, e.g. a result left in D0 by an inline-asm block).
+          const reg = this.evo && /^[DA][0-7]$/.test(e.name) ? e.name : null;
+          if (reg) {
+            const n = +reg[1];
+            if (reg[0] === 'D') { if (n !== D0) a.movel_dd(n, D0); }
+            else a.movel_ad(n, D0);
+            break;
+          }
           const c = this.sem.consts.get(e.name);
           if (c === undefined) { this.err(e, `tracer: unknown constant ${e.name}`); break; }
           if (c >= -128 && c <= 127) a.moveq(c, D0);
@@ -2633,8 +2642,10 @@ export class Codegen {
       }
       case 'AssignExp':
         this.exp(e.exp, ctx);
-        if (e.target.kind === 'Var') this.storeVar(e.target.name, ctx, e);
-        else this.err(e, 'tracer: assign to plain variables only');
+        this.assignInD0(e.target, ctx, e);   // Var or any lvalue (Member/Index/Deref)
+        break;
+      case 'Cast':   // n::type — value/pointer passes through; type used by typeOf
+        this.exp(e.obj, ctx);
         break;
       case 'Ternary': {
         const elseL = this.uniq('telse'), endL = this.uniq('tend');
@@ -2715,7 +2726,12 @@ export class Codegen {
           // absolute runtime address with no relocation.
           a.lea_pc(`proc_${e.name}`, A0);
           a.movel_ad(A0, D0);
-        } else { this.err(e, `unknown variable {${e.name}}`); break; }
+        } else {
+          // {label} — address of a code/data label (lp:). Emitted as user_<lp>;
+          // the assembler/linker resolves it (errors if the label is undefined).
+          a.lea_pc(`user_${e.name}`, A0);
+          a.movel_ad(A0, D0);
+        }
         break;
       }
       case 'Sizeof': case 'Psizeof': {
@@ -3528,6 +3544,16 @@ export class Codegen {
         a.movel_da(D0, A0);
         a.movew_disp_d(callee.name === 'EstrLen' || callee.name === 'ListLen' ? -2 : -4, A0, D0);
         a.extl(D0);
+        return;
+      }
+      // E-VO: SetStr(estr) with no length auto-computes it from the NUL.
+      if (this.evo && callee.name === 'SetStr' && e.args.length === 1) {
+        this.exp(e.args[0], ctx);
+        a.movel_d_push(D0);
+        a.bsr('__strlen');           // d0 = strlen(estr)
+        a.movel_dd(D0, D1);
+        a.movel_pop_d(D0);
+        a.bsr('__setstr');
         return;
       }
       const info = Codegen.BUILTINS[callee.name];
