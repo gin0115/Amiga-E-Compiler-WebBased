@@ -133,7 +133,7 @@ export class Codegen {
     for (const g of ['arg', 'stdin', 'conout', 'stdrast', 'wbmessage']) this.globalSlot(g);
     // mathieeesingtrans.library is disk-based: only open when F-functions
     // are used (singbas is ROM-resident and cheap, opened always)
-    this.usesTrans = /"name":"F(sin|cos|tan|exp|log|log10|pow|sqrt|atan|asin|acos)"/
+    this.usesTrans = /"name":"F(sin|cos|tan|exp|log|log10|pow|sqrt|atan|asin|acos|sinh|cosh|tanh|tieee|fieee)"/
       .test(JSON.stringify(program));
     // a linked binary module may itself call a transcendental intrinsic
     // (Fsin/Fcos/…) — open mathieeesingtrans for it too
@@ -1255,7 +1255,7 @@ export class Codegen {
     // quote-driven list functions (ch_9C): d0=varaddr, d1=src, d2=dest,
     // d3=code. State lives in the frame: quoted code clobbers D0-D6/A0-A3.
     for (const [name, kind] of [['__maplist', 'map'], ['__selectlist', 'sel'],
-      ['__forall', 'all'], ['__exists', 'any']]) {
+      ['__forall', 'all'], ['__exists', 'any'], ['__selectfirst', 'first']]) {
       a.label(name);
       a.link(A5, 28);
       a.movel_d_disp(D0, -4, A5);      // varaddr
@@ -1306,6 +1306,17 @@ export class Codegen {
         a.tstl(D0);
         a.bne(name + '_next');
         a.moveq(0, D0);
+        a.unlk(A5);
+        a.rts();
+      } else if (kind === 'first') {
+        // E-VO SelectFirst: return the first element whose expr is true
+        a.tstl(D0);
+        a.beq(name + '_next');
+        a.movel_disp_a(-8, A5, A0);    // src
+        a.movel_disp_d(-24, A5, D4);   // i
+        a.asll_imm(2, D4);
+        a.addal_d(D4, A0);
+        a.movel_ind_d(A0, D0);         // element
         a.unlk(A5);
         a.rts();
       } else {
@@ -3242,7 +3253,9 @@ export class Codegen {
         // float builtins: singbas one-arg, singtrans one-arg, Fpow two-arg
         const SB = { Fabs: -54, Ffloor: -90, Fceil: -96 };
         const TR = { Fatan: -30, Fsin: -36, Fcos: -42, Ftan: -48, Fexp: -78,
-          Flog: -84, Fsqrt: -96, Fasin: -114, Facos: -120, Flog10: -126 };
+          Flog: -84, Fsqrt: -96, Fasin: -114, Facos: -120, Flog10: -126,
+          // E-VO additions (mathieeesingtrans LVOs)
+          Fsinh: -60, Fcosh: -66, Ftanh: -72, Ftieee: -102, Ffieee: -108 };
         if (SB[callee.name] !== undefined || TR[callee.name] !== undefined) {
           this.exp(e.args[0], ctx);
           const sb = SB[callee.name] !== undefined;
@@ -3333,7 +3346,8 @@ export class Codegen {
         a.movel_d_ind(D1, A0);         // head
         return;
       }
-      if (['MapList', 'ForAll', 'Exists', 'SelectList'].includes(callee.name)) {
+      if (['MapList', 'ForAll', 'Exists', 'SelectList'].includes(callee.name) ||
+        (this.evo && callee.name === 'SelectFirst')) {
         const four = callee.name === 'MapList' || callee.name === 'SelectList';
         for (const arg of e.args) {
           this.exp(arg, ctx);
@@ -3343,7 +3357,8 @@ export class Codegen {
         else { a.movel_pop_d(D3); a.moveq(0, D2); a.movel_pop_d(D1); a.movel_pop_d(D0); }
         a.bsr(callee.name === 'MapList' ? '__maplist'
           : callee.name === 'SelectList' ? '__selectlist'
-            : callee.name === 'ForAll' ? '__forall' : '__exists');
+            : callee.name === 'ForAll' ? '__forall'
+              : callee.name === 'SelectFirst' ? '__selectfirst' : '__exists');
         return;
       }
       if (callee.name === 'Min' || callee.name === 'Max') {

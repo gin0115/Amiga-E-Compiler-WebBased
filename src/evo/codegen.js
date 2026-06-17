@@ -76,6 +76,13 @@ const EVO_BUILTINS = {
     a.movel_da(D0, A0);
     a.movew_d_disp(D1, -2, A0);
   },
+
+  // ---- Float string<->value (string parse/format; stubbed for now) ----
+  // RealVal(str): parse a decimal string to an (IEEE single) float. TODO: full
+  // parse; returns 0.0 for now so the suite compiles and runs.
+  RealVal(cg, e, ctx, a) { for (const x of e.args) cg.exp(x, ctx); a.moveq(0, D0); },
+  // RealF(estr, float, places): format float into estr. TODO; returns 0.
+  RealF(cg, e, ctx, a) { for (const x of e.args) cg.exp(x, ctx); a.moveq(0, D0); },
 };
 
 // Emit the E-VO shared runtime routines (called once from emitRuntime).
