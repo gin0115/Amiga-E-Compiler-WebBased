@@ -214,7 +214,10 @@ export class Sem {
       const size = typeSize(m.type);
       const count = m.size ? (this.foldConst(m.size) ?? 1) : 1;
       if (size > 1 && (at & 1)) at++;   // align INT/LONG to even like ec
-      members.set(m.name, { offset: at, size, type: m.type, count });
+      // ARRAY/OBJECT members are EMBEDDED: accessing them yields their address
+      // (size 0), not a loaded value, so obj.arr[i] indexes the inline storage.
+      const embedded = m.type?.base === 'ARRAY' || m.type?.base === 'OBJECT';
+      members.set(m.name, { offset: at, size: embedded ? 0 : size, type: m.type, count });
       return at + size * count;
     };
     for (let i = 0; i < d.members.length;) {

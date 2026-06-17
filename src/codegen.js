@@ -32,8 +32,8 @@ const CMP_COND = { '=': 'EQ', '<>': 'NE', '<': 'LT', '>': 'GT', '<=': 'LE', '>='
 function typeSize(t) {
   if (!t) return 1; // bare ARRAY defaults to ARRAY OF CHAR (ch_8)
   switch (t.base) {
-    case 'CHAR': return 1;
-    case 'INT': return 2;
+    case 'CHAR': case 'BYTE': return 1;   // BYTE: E-VO signed 8-bit
+    case 'INT': case 'WORD': return 2;    // WORD: E-VO unsigned 16-bit
     default: return 4;
   }
 }
@@ -1917,8 +1917,8 @@ export class Codegen {
         }
       }
       const t = this.typeOf(e, ctx);
-      if (t?.base === 'CHAR') return 1;
-      if (t?.base === 'INT') return 2;
+      if (t?.base === 'CHAR' || t?.base === 'BYTE') return 1;
+      if (t?.base === 'INT' || t?.base === 'WORD') return 2;
       return 4;
     }
     return 4;
@@ -1930,8 +1930,8 @@ export class Codegen {
   // a pointer yields the pointed-to size; for PSIZEOF (pAs4) it yields 4.
   sizeofConst(name, ctx, pAs4) {
     if (name === 'LONG' || name === 'PTR') return 4;
-    if (name === 'INT') return 2;
-    if (name === 'CHAR') return 1;
+    if (name === 'INT' || name === 'WORD') return 2;
+    if (name === 'CHAR' || name === 'BYTE') return 1;
     const obj = this.sem.objects.get(name);
     if (obj) return obj.size;
     const t = ctx?.types?.get(name) ?? this.globalTypes.get(name);

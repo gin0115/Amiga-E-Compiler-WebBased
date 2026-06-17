@@ -15,4 +15,6 @@ export const EVO_KEYWORDS = [
   'UNION', 'ENDUNION',
   // block-scoped exception handling
   'TRY', 'CATCH', 'ENDTRY',
+  // primitive types (BYTE = signed 8-bit, WORD = unsigned 16-bit)
+  'BYTE', 'WORD',
 ];

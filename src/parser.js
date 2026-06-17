@@ -239,7 +239,8 @@ class Parser {
       if (this.eat('kw', 'OF')) of = this.parseType();
       return { base: 'ARRAY', of };
     }
-    for (const t of ['LONG', 'INT', 'CHAR', 'STRING', 'LIST']) {
+    // BYTE/WORD are E-VO primitive types (keywords only in evo mode).
+    for (const t of ['LONG', 'INT', 'CHAR', 'STRING', 'LIST', 'BYTE', 'WORD']) {
       if (this.eat('kw', t)) return { base: t };
     }
     const id = this.eat('ident') ?? this.eat('upper') ?? this.eat('ecall');
@@ -958,7 +959,7 @@ class Parser {
           case 'SIZEOF': {
             this.next();
             const tt = this.peek();
-            if (tt.type === 'kw' && ['LONG', 'INT', 'CHAR', 'PTR'].includes(tt.value)) {
+            if (tt.type === 'kw' && ['LONG', 'INT', 'CHAR', 'PTR', 'BYTE', 'WORD'].includes(tt.value)) {
               this.next();
               return { kind: 'Sizeof', name: tt.value };
             }
@@ -969,7 +970,7 @@ class Parser {
           case 'PSIZEOF': {   // E-VO: like SIZEOF but pointer types -> 4
             this.next();
             const tt = this.peek();
-            if (tt.type === 'kw' && ['LONG', 'INT', 'CHAR', 'PTR'].includes(tt.value)) {
+            if (tt.type === 'kw' && ['LONG', 'INT', 'CHAR', 'PTR', 'BYTE', 'WORD'].includes(tt.value)) {
               this.next();
               return { kind: 'Psizeof', name: tt.value };
             }
