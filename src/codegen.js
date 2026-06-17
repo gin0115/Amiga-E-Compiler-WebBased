@@ -2470,6 +2470,31 @@ export class Codegen {
       case 'Bin': case 'FloatConv': case 'FloatPrefix':
         this.fchain(e, ctx, { f: false });
         break;
+      case 'QuickCompare': {   // E-VO  exp == [v, lo TO hi, ...]  -> -1/0
+        const tru = this.uniq('qctrue'), end = this.uniq('qcend');
+        this.exp(e.exp, ctx);
+        a.movel_dd(D0, D2);                 // subject kept in D2
+        for (const it of e.items) {
+          if (it.val !== undefined) {
+            this.exp(it.val, ctx);
+            a.cmpl_dd(D0, D2);              // D2 - val
+            a.beq(tru);
+          } else {                          // lo TO hi (inclusive)
+            const skip = this.uniq('qcskip');
+            this.exp(it.from, ctx);
+            a.cmpl_dd(D0, D2);              // D2 - lo
+            a.bcc(COND.LT, skip);           // D2 < lo -> not in range
+            this.exp(it.to, ctx);
+            a.cmpl_dd(D0, D2);              // D2 - hi
+            a.bcc(COND.LE, tru);            // D2 <= hi -> match
+            a.label(skip);
+          }
+        }
+        a.moveq(0, D0); a.bra(end);
+        a.label(tru); a.moveq(-1, D0);
+        a.label(end);
+        break;
+      }
       case 'Logical': {   // E-VO ANDALSO / ORELSE — short-circuit, result -1/0
         const end = this.uniq('scend');
         if (e.op === 'ANDALSO') {

@@ -734,6 +734,20 @@ class Parser {
       // Lexed as two '<' / '>' tokens so nested lisp cells still close with
       // '>>'; only pair them outside a cell (cellDepth 0).
       const t2 = this.peek(1);
+      // E-VO quick-compare: exp == [v, lo TO hi, ...]  (== lexed as two '=').
+      if (t.type === '=' && t2.type === '=' && t2.line === t.line && t2.col === t.col + 1) {
+        this.next(); this.next();
+        this.expect('[');
+        const items = [];
+        do {
+          const e = this.parseExp();
+          if (this.eat('kw', 'TO')) items.push({ from: e, to: this.parseExp() });
+          else items.push({ val: e });
+        } while (this.eat(','));
+        this.expect(']');
+        left = { kind: 'QuickCompare', exp: left, items };
+        continue;
+      }
       if ((t.type === '<' || t.type === '>') && this.cellDepth === 0 &&
         t2.type === t.type && t2.line === t.line && t2.col === t.col + 1) {
         op = t.type === '<' ? 'SHL' : 'SHR';

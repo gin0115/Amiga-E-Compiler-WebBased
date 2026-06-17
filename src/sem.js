@@ -377,8 +377,15 @@ export class Sem {
         for (const a of e.args) this.checkExp(a, scope, p);
         break;
       }
-      case 'Bin': this.checkExp(e.l, scope, p); this.checkExp(e.r, scope, p); break;
-      case 'Neg': case 'FloatConv': case 'FloatPrefix': case 'Quote': case 'Paren': this.checkExp(e.exp, scope, p); break;
+      case 'Bin': case 'Logical': this.checkExp(e.l, scope, p); this.checkExp(e.r, scope, p); break;
+      case 'QuickCompare':   // E-VO  exp == [v, lo TO hi, ...]
+        this.checkExp(e.exp, scope, p);
+        for (const it of e.items) {
+          if (it.val !== undefined) this.checkExp(it.val, scope, p);
+          else { this.checkExp(it.from, scope, p); this.checkExp(it.to, scope, p); }
+        }
+        break;
+      case 'Neg': case 'Not': case 'FloatConv': case 'FloatPrefix': case 'Quote': case 'Paren': this.checkExp(e.exp, scope, p); break;
       case 'AssignExp': this.checkExp(e.target, scope, p); this.checkExp(e.exp, scope, p); break;
       case 'Ternary': this.checkExp(e.cond, scope, p); this.checkExp(e.then, scope, p); this.checkExp(e.else, scope, p); break;
       case 'List': for (const i of e.items) this.checkExp(i, scope, p); break;
