@@ -523,6 +523,14 @@ class Parser {
       this.expectNl();
       return { kind: 'Assign', target: exp, exp: rhs };
     }
+    // E-VO compound assignment: desugar 'lval OP= rhs' to 'lval := lval OP rhs'.
+    const ca = this.peekCompoundAssign();
+    if (ca) {
+      this.next(); this.next();   // consume the two operator tokens
+      const rhs = this.parseExp();
+      this.expectNl();
+      return { kind: 'Assign', target: exp, exp: { kind: 'Bin', op: ca.op, l: exp, r: rhs } };
+    }
     this.expectNl();
     if (exp.kind === 'AssignExp') return { kind: 'Assign', target: exp.target, exp: exp.exp };
     return { kind: 'ExprStat', exp };
@@ -673,6 +681,9 @@ class Parser {
     if (neg) left = { kind: 'Neg', exp: left };
     for (;;) {
       const t = this.peek();
+      // E-VO compound assignment (x += 5, a AND= 1, x <<= 3): stop the chain so
+      // the statement parser sees 'lval OP= rhs' instead of consuming OP here.
+      if (this.peekCompoundAssign()) break;
       let op = null, shiftPair = false;
       // E-VO / modern E: an adjacent '<<' / '>>' is a symbol alias for SHL/SHR.
       // Lexed as two '<' / '>' tokens so nested lisp cells still close with
@@ -700,6 +711,25 @@ class Parser {
       left = { kind: 'Bin', op, l: left, r: right };
     }
     return left;
+  }
+
+  // E-VO compound-assignment operator at the current position, or null.
+  // Returns the equivalent binary op and how many tokens it spans. Lexed as
+  // separate tokens, so we require them to be physically adjacent:
+  //   +=  -=  *=  /=   ->  the simple op then '='
+  //   AND= OR=          ->  the keyword then '='
+  //   <<= >>=           ->  '<' then '<=' (resp. '>' then '>=')  (lexer munch)
+  peekCompoundAssign() {
+    const t = this.peek(), t2 = this.peek(1);
+    const adj = t2.line === t.line && t.col + (t.raw ? t.raw.length : 1) === t2.col;
+    if (!adj) return null;
+    if (t2.type === '=') {
+      if (t.type === '+' || t.type === '-' || t.type === '*' || t.type === '/') return { op: t.type, n: 2 };
+      if (t.type === 'kw' && (t.value === 'AND' || t.value === 'OR')) return { op: t.value, n: 2 };
+    }
+    if (t.type === '<' && t2.type === '<=') return { op: 'SHL', n: 2 };
+    if (t.type === '>' && t2.type === '>=') return { op: 'SHR', n: 2 };
+    return null;
   }
 
   atItemStart() {
