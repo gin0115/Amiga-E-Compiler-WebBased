@@ -18,6 +18,8 @@ export const KEYWORDS = new Set([
   // E-VO negative / extended control flow.
   'IFN', 'ELSEIFN', 'WHILEN', 'ELSEWHILE', 'ELSEWHILEN', 'ALWAYS', 'UNTILN',
   'EXITN', 'CONT', 'CONTN',
+  // E-VO unary size/offset operators.
+  'PSIZEOF', 'ARRAYSIZE', 'OFFSETOF',
 ]);
 
 // Compile-time character escapes (ch_2F). Runtime format codes (\d \h \s \c

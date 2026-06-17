@@ -62,6 +62,7 @@ export class Codegen {
     ]);
     this.globalSize = 32;
     this.globalTypes = new Map();
+    this.globalArrayDims = new Map();   // E-VO multi-dim global arrays: name -> [dims]
   }
 
   err(node, msg) { this.errors.push({ line: node?.line, msg }); }
@@ -98,7 +99,16 @@ export class Codegen {
         if (v.type) this.globalTypes.set(v.name, v.type);
         if (!v.size) continue;
         // sized globals get buffers in the globals area, wired at startup
-        const count = this.sem.foldConst(v.size);
+        let count;
+        if (v.dims && v.dims.length > 1) {
+          const dimsC = v.dims.map(x => this.sem.foldConst(x));
+          if (dimsC.some(x => x === null)) { this.err(d, `dimensions of global ${v.name} must be constant`); continue; }
+          this.globalArrayDims.set(v.name, dimsC);
+          count = dimsC.reduce((pp, x) => pp * x, 1);
+        } else {
+          count = this.sem.foldConst(v.size);
+          if (v.dims) this.globalArrayDims.set(v.name, [count]);
+        }
         if (count === null) { this.err(d, `size of global ${v.name} must be constant`); continue; }
         const base = v.type?.base;
         if (base === 'STRING' || base === 'LIST') {
@@ -1660,6 +1670,7 @@ export class Codegen {
       epilogue: this.uniq('ep'),
       loopEnds: [],
       loopConts: [],   // CONT targets (parallel to loopEnds)
+      arrayDims: new Map(),   // name -> [dim sizes] for E-VO multi-dim arrays
     };
     for (const arg of args) if (arg.type) ctx.types.set(arg.name, arg.type);
     let frame = 0;
@@ -1686,7 +1697,17 @@ export class Codegen {
         }
         // sized declarations get a frame buffer; the variable holds a
         // pointer to it, set up at procedure entry
-        const count = this.sem.foldConst(v.size);
+        // E-VO multi-dim: total element count = product of all dimensions.
+        let count, dimsC = null;
+        if (v.dims && v.dims.length > 1) {
+          dimsC = v.dims.map(d => this.sem.foldConst(d));
+          if (dimsC.some(d => d === null)) { this.err(s, `dimensions of ${v.name} must be constant`); continue; }
+          ctx.arrayDims.set(v.name, dimsC);
+          count = dimsC.reduce((p, d) => p * d, 1);
+        } else {
+          count = this.sem.foldConst(v.size);
+          if (v.dims) ctx.arrayDims.set(v.name, [count]);
+        }
         if (count === null) { this.err(s, `size of ${v.name} must be constant`); continue; }
         const base = v.type?.base;
         if (base === 'STRING') {
@@ -1854,6 +1875,72 @@ export class Codegen {
   }
 
   // compute the address of a memory lvalue into A0; returns byte offset
+  // SIZEOF/PSIZEOF as a compile-time constant. `name` is a primitive keyword,
+  // an object type, or a variable (resolved via its declared type). For SIZEOF
+  // a pointer yields the pointed-to size; for PSIZEOF (pAs4) it yields 4.
+  sizeofConst(name, ctx, pAs4) {
+    if (name === 'LONG' || name === 'PTR') return 4;
+    if (name === 'INT') return 2;
+    if (name === 'CHAR') return 1;
+    const obj = this.sem.objects.get(name);
+    if (obj) return obj.size;
+    const t = ctx?.types?.get(name) ?? this.globalTypes.get(name);
+    if (!t) return this.varRef(name, ctx) ? 4 : null;   // untyped var = PTR TO CHAR
+    if (t.base === 'PTR') {
+      if (pAs4) return 4;
+      const to = t.to;
+      if (!to) return 4;
+      if (to.base === 'OBJECT') return this.sem.objects.get(to.name)?.size ?? 4;
+      return typeSize(to);
+    }
+    if (t.base === 'ARRAY') return typeSize(t.of);
+    if (t.base === 'OBJECT') return this.sem.objects.get(t.name)?.size ?? 4;
+    return typeSize(t);
+  }
+
+  // Dimension sizes of a declared E-VO multi-dim array variable, or null.
+  arrayDimsOf(name, ctx) {
+    return ctx.arrayDims?.get(name) ?? this.globalArrayDims.get(name) ?? null;
+  }
+
+  // Address of a multi-dimensional array access m[i][j]... Returns {disp:0}
+  // with A0 = element/sub-array address, or null if `e` is not a multi-dim
+  // access (caller falls back to the ordinary single-index path).
+  multiDimAddress(e, ctx) {
+    // unwind the Index chain to the base variable, collecting indices
+    const idxs = [];
+    let node = e;
+    while (node.kind === 'Index' && node.idx) { idxs.unshift(node.idx); node = node.obj; }
+    if (node.kind !== 'Var') return null;
+    const dims = this.arrayDimsOf(node.name, ctx);
+    if (!dims || dims.length < 2) return null;   // only true multi-dim arrays
+    if (idxs.length > dims.length) return null;
+    const a = this.a;
+    const vt = ctx.types.get(node.name) ?? this.globalTypes.get(node.name);
+    const esize = typeSize(vt?.of);
+    // remaining stride (in elements) for a partial index = product of unindexed dims
+    let remStride = 1;
+    for (let p = idxs.length; p < dims.length; p++) remStride *= dims[p];
+    // compute the linear element index via Horner: ((i0*d1+i1)*d2+i2)...
+    this.exp(idxs[0], ctx);                 // D0 = i0
+    for (let p = 1; p < idxs.length; p++) {
+      a.movel_imm(dims[p], D1);
+      a.mulsw_dd(D1, D0);                   // D0 *= dims[p]
+      a.movel_d_push(D0);
+      this.exp(idxs[p], ctx);               // D0 = i_p
+      a.movel_pop_d(D1);
+      a.addl_dd(D1, D0);                    // D0 = i_p + partial
+    }
+    const factor = remStride * esize;
+    if (factor !== 1) { a.movel_imm(factor, D1); a.mulsw_dd(D1, D0); }
+    a.movel_d_push(D0);
+    this.loadVar(node.name, ctx, e);        // D0 = base pointer
+    a.movel_pop_d(D1);
+    a.movel_da(D0, A0);
+    a.addal_d(D1, A0);
+    return { disp: 0 };
+  }
+
   addressOf(e, ctx) {
     const a = this.a;
     if (e.kind === 'Member') {
@@ -1867,6 +1954,9 @@ export class Codegen {
       return m.offset;
     }
     if (e.kind === 'Index') {
+      // E-VO multi-dimensional array: m[i][j]... on a contiguous block.
+      const md = this.multiDimAddress(e, ctx);
+      if (md) return md.disp;
       const et = this.typeOf(e, ctx);
       const esize = et?.base === 'CHAR' ? 1 : et?.base === 'INT' ? 2 :
         et?.base === 'OBJECT' ? (this.sem.objects.get(et.name)?.size ?? 4) : 4;
@@ -2600,11 +2690,25 @@ export class Codegen {
         } else { this.err(e, `unknown variable {${e.name}}`); break; }
         break;
       }
-      case 'Sizeof': {
-        const v = this.sem.foldConst(e);
-        if (v === null) { this.err(e, `unknown SIZEOF ${e.name}`); break; }
-        if (v >= -128 && v <= 127) a.moveq(v, D0);
-        else a.movel_imm(v, D0);
+      case 'Sizeof': case 'Psizeof': {
+        const v = this.sizeofConst(e.name, ctx, e.kind === 'Psizeof');
+        if (v === null) { this.err(e, `unknown ${e.kind === 'Psizeof' ? 'PSIZEOF' : 'SIZEOF'} ${e.name}`); break; }
+        if (v >= -128 && v <= 127) a.moveq(v, D0); else a.movel_imm(v, D0);
+        break;
+      }
+      case 'Offsetof': {   // E-VO OFFSETOF objtype.member
+        const obj = this.sem.objects.get(e.objType);
+        const m = obj?.members.get(e.member);
+        if (!m) { this.err(e, `unknown OFFSETOF ${e.objType}.${e.member}`); break; }
+        if (m.offset >= -128 && m.offset <= 127) a.moveq(m.offset, D0); else a.movel_imm(m.offset, D0);
+        break;
+      }
+      case 'Arraysize': {   // E-VO ARRAYSIZE [dim,] arrayvar
+        const dim = this.sem.foldConst(e.dim) ?? 1;
+        const dims = this.arrayDimsOf(e.name, ctx);
+        const v = dims ? (dims[dim - 1] ?? 0) : 0;
+        if (!dims) { this.err(e, `ARRAYSIZE on non-array ${e.name}`); break; }
+        if (v >= -128 && v <= 127) a.moveq(v, D0); else a.movel_imm(v, D0);
         break;
       }
       case 'Call': this.call(e, ctx); break;

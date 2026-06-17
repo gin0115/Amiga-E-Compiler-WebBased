@@ -250,9 +250,14 @@ class Parser {
     const name = this.eat('ident') ?? this.eat('ecall') ?? this.eat('upper') ??
       this.expect('ident', undefined, 'variable name');
     const decl = { name: name?.value ?? '?', size: null, type: null, init: null };
-    if (this.eat('[')) {
-      decl.size = this.parseExp();
-      this.expect(']');
+    if (this.at('[')) {
+      // E-VO multi-dimensional arrays: DEF m[3][3]:ARRAY OF LONG
+      decl.dims = [];
+      while (this.eat('[')) {
+        decl.dims.push(this.parseExp());
+        this.expect(']');
+      }
+      decl.size = decl.dims[0];   // back-compat: single-dim path uses .size
     }
     // '=default' and ':type' occur in either order (corpus: name=NIL:PTR TO LONG)
     for (;;) {
@@ -899,6 +904,36 @@ class Parser {
             const id = this.eat('ident') ?? this.eat('ecall') ??
               this.expect('ident', undefined, 'object name');
             return { kind: 'Sizeof', name: id?.value };
+          }
+          case 'PSIZEOF': {   // E-VO: like SIZEOF but pointer types -> 4
+            this.next();
+            const tt = this.peek();
+            if (tt.type === 'kw' && ['LONG', 'INT', 'CHAR', 'PTR'].includes(tt.value)) {
+              this.next();
+              return { kind: 'Psizeof', name: tt.value };
+            }
+            const id = this.eat('ident') ?? this.eat('ecall') ??
+              this.expect('ident', undefined, 'object name');
+            return { kind: 'Psizeof', name: id?.value };
+          }
+          case 'OFFSETOF': {   // E-VO: OFFSETOF objtype.member
+            this.next();
+            const ot = this.eat('ident') ?? this.eat('upper') ?? this.eat('ecall') ??
+              this.expect('ident', undefined, 'object type');
+            this.expect('.');
+            const m = this.eat('ident') ?? this.eat('upper') ?? this.eat('ecall') ??
+              this.expect('ident', undefined, 'member');
+            return { kind: 'Offsetof', objType: ot?.value, member: m?.value };
+          }
+          case 'ARRAYSIZE': {   // E-VO: ARRAYSIZE [dim,] arrayvar
+            this.next();
+            const e1 = this.parseChain();
+            if (this.eat(',')) {
+              const id = this.eat('ident') ?? this.eat('ecall') ?? this.eat('upper') ??
+                this.expect('ident', undefined, 'array variable');
+              return { kind: 'Arraysize', dim: e1, name: id?.value };
+            }
+            return { kind: 'Arraysize', dim: { kind: 'Num', value: 1 }, name: e1?.name };
           }
           case 'NEW': {
             this.next();
