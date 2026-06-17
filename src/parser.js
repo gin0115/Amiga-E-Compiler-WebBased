@@ -527,6 +527,16 @@ class Parser {
     }
     // assignment or expression statement
     const exp = this.parseExp();
+    // E-VO swap: a :=: b  (lexed as ':=' then an adjacent ':')
+    {
+      const t0 = this.peek(), t1 = this.peek(1);
+      if (t0.type === ':=' && t1.type === ':' && t1.line === t0.line && t1.col === t0.col + 2) {
+        this.next(); this.next();
+        const rhs = this.parseExp();
+        this.expectNl();
+        return { kind: 'Swap', a: exp, b: rhs };
+      }
+    }
     if (this.eat(':=')) {
       const rhs = this.parseExp();
       this.expectNl();
@@ -839,8 +849,12 @@ class Parser {
       }
       case 'ident': case 'ecall': case 'upper': {
         const ref = this.parseRef();
-        // grammar item: var ":=" exp — assignment expression without parens
-        if (this.at(':=')) {
+        // grammar item: var ":=" exp — assignment expression without parens.
+        // But a ':=' immediately followed by ':' is the E-VO swap operator
+        // (a :=: b); leave it for the statement parser.
+        const nx = this.peek(1);
+        const isSwap = nx.type === ':' && nx.line === this.peek().line && nx.col === this.peek().col + 2;
+        if (this.at(':=') && !isSwap) {
           this.next();
           return { kind: 'AssignExp', target: ref, exp: this.parseChain() };
         }

@@ -1931,6 +1931,22 @@ export class Codegen {
     else this.a.movel_d_disp(D0, r.disp, A5);
   }
 
+  // Store the value currently in D0 into an assignment target (Var or an
+  // lvalue: Member/Index/Deref). Used by Assign and Swap.
+  assignInD0(target, ctx, node) {
+    const a = this.a;
+    if (target.kind === 'Var') {
+      this.storeVar(target.name, ctx, node);
+    } else if (['Member', 'Index', 'Deref'].includes(target.kind)) {
+      a.movel_d_push(D0);
+      const disp = this.addressOf(target, ctx);
+      a.movel_pop_d(D0);
+      const size = this.accessSize(target, ctx);
+      if (size === 0) this.err(node, 'cannot assign to embedded member');
+      else this.storeTo(disp, size);
+    } else this.err(node, `cannot assign to ${target.kind}`);
+  }
+
   // ---------- statements ----------
 
   stat(s, ctx) {
@@ -1942,19 +1958,16 @@ export class Codegen {
         }
         break;
       case 'Assign':
-        if (s.target.kind === 'Var') {
-          this.exp(s.exp, ctx);
-          this.storeVar(s.target.name, ctx, s);
-        } else if (['Member', 'Index', 'Deref'].includes(s.target.kind)) {
-          this.exp(s.exp, ctx);
-          a.movel_d_push(D0);
-          const disp = this.addressOf(s.target, ctx);
-          a.movel_pop_d(D0);
-          const size = this.accessSize(s.target, ctx);
-          if (size === 0) this.err(s, 'cannot assign to embedded member');
-          else this.storeTo(disp, size);
-        } else this.err(s, `cannot assign to ${s.target.kind}`);
+        this.exp(s.exp, ctx);
+        this.assignInD0(s.target, ctx, s);
         break;
+      case 'Swap': {   // E-VO  a :=: b  — exchange two lvalues
+        this.exp(s.a, ctx); a.movel_d_push(D0);
+        this.exp(s.b, ctx); a.movel_d_push(D0);
+        a.movel_pop_d(D0); this.assignInD0(s.a, ctx, s);   // a := (old b)
+        a.movel_pop_d(D0); this.assignInD0(s.b, ctx, s);   // b := (old a)
+        break;
+      }
       case 'ExprStat': this.exp(s.exp, ctx); break;
       case 'Return': {
         const rets = s.exps;

@@ -331,6 +331,7 @@ export class Sem {
         break;
       case 'Return': for (const e of s.exps) this.checkExp(e, scope, p); break;
       case 'Exit': case 'Cont': if (s.cond) this.checkExp(s.cond, scope, p); break;
+      case 'Swap': this.checkExp(s.a, scope, p); this.checkExp(s.b, scope, p); break;
       case 'Inc': case 'Dec': this.checkExp(s.lval, scope, p); break;
       case 'NewStat': for (const t of s.targets) this.checkExp(t, scope, p); break;
       case 'EndStat': for (const t of s.targets) this.checkExp(t, scope, p); break;
