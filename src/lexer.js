@@ -111,6 +111,12 @@ export function lex(src, filename = '<input>', opts = {}) {
         }
         if (ch === '\\') {
           const e = src[i + 1];
+          // E-VO extra escapes: \! = bell (7), \xNN = hex char
+          if (opts.evo && e === '!') { value += '\x07'; raw += '\\!'; i += 2; col += 2; continue; }
+          if (opts.evo && e === 'x' && /^[0-9A-Fa-f]{2}$/.test(src.slice(i + 2, i + 4))) {
+            value += String.fromCharCode(parseInt(src.slice(i + 2, i + 4), 16));
+            raw += '\\x' + src.slice(i + 2, i + 4); i += 4; col += 4; continue;
+          }
           raw += ch + (e ?? '');
           if (ESCAPES.has(e)) value += String.fromCharCode(ESCAPES.get(e));
           else value += '\\' + (e ?? '');

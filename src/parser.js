@@ -937,7 +937,9 @@ class Parser {
         const isSwap = this.evo && nx.type === ':' && nx.line === this.peek().line && nx.col === this.peek().col + 2;
         if (this.at(':=') && !isSwap) {
           this.next();
-          return { kind: 'AssignExp', target: ref, exp: this.parseChain() };
+          // full expression RHS so statement assignments capture ternary/BUT
+          // (r := x>3 ? 100 : 200), not just the binary chain.
+          return { kind: 'AssignExp', target: ref, exp: this.parseExp() };
         }
         return ref;
       }

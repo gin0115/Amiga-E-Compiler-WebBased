@@ -2035,11 +2035,37 @@ export class Codegen {
     return 0;
   }
 
-  loadFrom(disp, size) {
+  // `signed`: true = sign-extend (BYTE/INT), false = zero-extend (CHAR/WORD),
+  // null/undefined = size default (byte unsigned, word signed — the EC default).
+  loadFrom(disp, size, signed) {
     const a = this.a;
-    if (size === 1) { a.moveq(0, D0); a.moveb_disp_d(disp, A0, D0); }
-    else if (size === 2) { a.movew_disp_d(disp, A0, D0); a.extl(D0); }
-    else a.movel_disp_d(disp, A0, D0);
+    if (signed === undefined || signed === null) signed = (size === 2);
+    if (size === 1) {
+      if (signed) { a.moveb_disp_d(disp, A0, D0); a.extw(D0); a.extl(D0); }
+      else { a.moveq(0, D0); a.moveb_disp_d(disp, A0, D0); }
+    } else if (size === 2) {
+      if (signed) { a.movew_disp_d(disp, A0, D0); a.extl(D0); }
+      else { a.moveq(0, D0); a.movew_disp_d(disp, A0, D0); }
+    } else a.movel_disp_d(disp, A0, D0);
+  }
+
+  // sign-extend (BYTE/INT) vs zero-extend (CHAR/WORD) on load, or null=default
+  accessSigned(e, ctx) {
+    let t;
+    if (e.kind === 'Index') {
+      const idxs = []; let n = e;
+      while (n.kind === 'Index' && n.idx) { idxs.unshift(n.idx); n = n.obj; }
+      if (n.kind === 'Var') {
+        const dims = this.arrayDimsOf(n.name, ctx);
+        if (dims && dims.length >= 2 && idxs.length >= dims.length) {
+          t = (ctx.types.get(n.name) ?? this.globalTypes.get(n.name))?.of;
+        }
+      }
+    }
+    if (!t) t = this.typeOf(e, ctx);
+    if (t?.base === 'CHAR' || t?.base === 'WORD') return false;
+    if (t?.base === 'BYTE' || t?.base === 'INT') return true;
+    return null;
   }
 
   storeTo(disp, size) {
@@ -2742,7 +2768,7 @@ export class Codegen {
         if (size === 0) {                      // embedded member: its address
           a.lea_disp(disp, A0, A0);
           a.movel_ad(A0, D0);
-        } else this.loadFrom(disp, size);
+        } else this.loadFrom(disp, size, this.accessSigned(e, ctx));
         break;
       }
       case 'PostInc': case 'PostDec': {
