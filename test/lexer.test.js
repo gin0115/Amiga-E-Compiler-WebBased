@@ -127,6 +127,10 @@ test('operator maximal munch', a => {
   a.deepEqual(types('p:LONG'), ['ident', ':', 'kw']);
   a.deepEqual(types('i++'), ['ident', '++']);
   a.deepEqual(types('j--'), ['ident', '--']);
+  // E-VO shift '<<'/'>>' stays two tokens at lex time (nested cells close with
+  // '>>'); the parser recombines an adjacent pair into SHL/SHR.
+  a.deepEqual(types('a<<b'), ['ident', '<', '<', 'ident']);
+  a.deepEqual(types('a>>b'), ['ident', '>', '>', 'ident']);
   a.deepEqual(types('a-b'), ['ident', '-', 'ident']);
   a.deepEqual(types('a - -b'), ['ident', '-', '-', 'ident']);
 });

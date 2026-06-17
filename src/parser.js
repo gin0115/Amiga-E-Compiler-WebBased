@@ -673,14 +673,24 @@ class Parser {
     if (neg) left = { kind: 'Neg', exp: left };
     for (;;) {
       const t = this.peek();
-      let op = null;
-      if (BINOPS.has(t.type)) op = t.type;
+      let op = null, shiftPair = false;
+      // E-VO / modern E: an adjacent '<<' / '>>' is a symbol alias for SHL/SHR.
+      // Lexed as two '<' / '>' tokens so nested lisp cells still close with
+      // '>>'; only pair them outside a cell (cellDepth 0).
+      const t2 = this.peek(1);
+      if ((t.type === '<' || t.type === '>') && this.cellDepth === 0 &&
+        t2.type === t.type && t2.line === t.line && t2.col === t.col + 1) {
+        op = t.type === '<' ? 'SHL' : 'SHR';
+        shiftPair = true;
+      }
+      else if (BINOPS.has(t.type)) op = t.type;
       else if (t.type === 'kw' && KWBINOPS.has(t.value)) op = t.value;
       else if (t.type === 'upper' && ['SHL', 'SHR', 'XOR'].includes(t.value)) op = t.value;
       if (!op) break;
       if (op === '>' && this.cellDepth > 0) break;
       if (op === '|' && this.cellDepth > 0) break;
       this.next();
+      if (shiftPair) this.next();   // consume the second '<' / '>' of the pair
       // '!' may be a postfix float-conversion with no right operand
       if (op === '!' && !this.atItemStart()) {
         left = { kind: 'FloatConv', exp: left };
