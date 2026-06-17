@@ -14,6 +14,7 @@ import { writeHunk } from './hunk.js';
 import { AsmText } from './asmtext.js';
 import { ifuncName } from './ifuncs.js';
 import { IFUNC_THUNKS } from './ifunc_thunks.js';
+import { evoBuiltin, emitEvoRuntime } from './evo/codegen.js';
 
 const D0 = 0, D1 = 1, D2 = 2, D3 = 3, D4 = 4, D5 = 5, D6 = 6, D7 = 7;
 const A0 = 0, A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, A6 = 6, A7 = 7;
@@ -527,6 +528,8 @@ export class Codegen {
 
   emitRuntime() {
     const a = this.a;
+    // E-VO stdlib runtime routines (gated; native output is unchanged)
+    if (this.evo) emitEvoRuntime(this);
 
     // __udivmod: d0/d1 unsigned -> quotient d0, remainder d1
     a.label('__udivmod');
@@ -3530,6 +3533,8 @@ export class Codegen {
       if (lib) { this.emitLibCall(e, ctx, lib); return; }
       const mf = this.sem.libfuncs?.get(callee.name);
       if (mf) { this.emitModLibCall(e, ctx, mf); return; }
+      // E-VO stdlib builtins (List/String/Astr/Mem/…) live in src/evo/codegen.js
+      if (this.evo && evoBuiltin(this, callee.name, e, ctx)) return;
       this.err(e, `builtin ${callee.name} not yet supported`);
       return;
     }
