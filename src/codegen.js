@@ -2433,6 +2433,30 @@ export class Codegen {
   // NEW p / NEW p[n] — allocate zeroed memory sized from p's pointer type
   genNew(lval, ctx, node) {
     const a = this.a;
+    // E-VO: NEW <objtype> or NEW <objtype>.ctor(args) — objtype names an OBJECT
+    // type (not a variable). Allocate sizeof(objtype); the expression value is
+    // the fresh pointer. The constructor form also runs the OF method on it.
+    const typeName = lval.kind === 'Var' ? lval.name
+      : (lval.kind === 'Call' && lval.callee.kind === 'Member' && lval.callee.obj.kind === 'Var')
+        ? lval.callee.obj.name : null;
+    if (typeName && this.sem.objects.has(typeName) && !this.varRef(typeName, ctx)) {
+      const sz = this.sem.objects.get(typeName).size;
+      if (sz >= -128 && sz <= 127) a.moveq(sz, D0); else a.movel_imm(sz, D0);
+      a.bsr('__new');                         // D0 = fresh pointer
+      if (lval.kind === 'Var') return;        // bare NEW objtype
+      const method = lval.callee.name;
+      let owner = typeName;
+      while (owner && !this.sem.procs.has(`${owner}.${method}`)) owner = this.sem.objects.get(owner)?.of ?? null;
+      if (!owner) { this.err(node, `no constructor ${method} on ${typeName}`); return; }
+      a.movel_d_push(D0);                     // keep the pointer across the call
+      a.movel_d_push(D0);                     // self (hidden first arg)
+      for (const arg of lval.args) { this.exp(arg, ctx); a.movel_d_push(D0); }
+      a.bsr(`proc_${owner}$${method}`);
+      const pop = 4 * (lval.args.length + 1);
+      if (pop <= 8) a.addql_a(pop, A7); else a.addal_imm(pop, A7);
+      a.movel_pop_d(D0);                      // expression value = the pointer
+      return;
+    }
     // constructor form: NEW a.create(args) — allocate, then call the method
     if (lval.kind === 'Call' && lval.callee.kind === 'Member') {
       const objExp = lval.callee.obj;

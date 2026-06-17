@@ -354,13 +354,25 @@ export class Sem {
       case 'Exit': case 'Cont': if (s.cond) this.checkExp(s.cond, scope, p); break;
       case 'Swap': this.checkExp(s.a, scope, p); this.checkExp(s.b, scope, p); break;
       case 'Inc': case 'Dec': this.checkExp(s.lval, scope, p); break;
-      case 'NewStat': for (const t of s.targets) this.checkExp(t, scope, p); break;
+      case 'NewStat': for (const t of s.targets) this.checkNewTarget(t, scope, p); break;
       case 'EndStat': for (const t of s.targets) this.checkExp(t, scope, p); break;
       case 'Void': this.checkExp(s.exp, scope, p); break;
       case 'Data': for (const v of s.values) this.checkExp(v, scope, p); break;
       case 'Jump': case 'Label': case 'Asm': case 'Incbin': case 'Preproc': break;
       default: break;
     }
+  }
+
+  // A NEW target may be an OBJECT type name (E-VO: NEW objtype [.ctor(args)]),
+  // which is not a variable — only validate the constructor arguments then.
+  checkNewTarget(lval, scope, p) {
+    if (lval.kind === 'Var' && this.objects.has(lval.name)) return;
+    if (lval.kind === 'Call' && lval.callee?.kind === 'Member' &&
+      lval.callee.obj?.kind === 'Var' && this.objects.has(lval.callee.obj.name)) {
+      for (const a of lval.args) this.checkExp(a, scope, p);
+      return;
+    }
+    this.checkExp(lval, scope, p);
   }
 
   checkVar(name, node, scope, p) {
@@ -419,7 +431,7 @@ export class Sem {
       case 'Cast': this.checkExp(e.obj, scope, p); break;
       case 'PostInc': case 'PostDec': this.checkExp(e.obj, scope, p); break;
       case 'Deref': this.checkExp(e.lval, scope, p); break;
-      case 'New': this.checkExp(e.lval, scope, p); break;
+      case 'New': this.checkNewTarget(e.lval, scope, p); break;
       case 'NewList': this.checkExp(e.list, scope, p); break;
       case 'AddrOf': break; // {x} may reference labels resolved at codegen
       case 'But': this.checkExp(e.first, scope, p); this.checkExp(e.value, scope, p); break;

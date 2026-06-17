@@ -904,6 +904,8 @@ class Parser {
         return { kind: 'Deref', lval };
       }
       case 'ident': case 'ecall': case 'upper': {
+        // E-VO predefined macro: _SRCLINE_ -> the current source line number.
+        if (t.value === '_SRCLINE_') { this.next(); return { kind: 'Num', value: t.line }; }
         const ref = this.parseRef();
         // grammar item: var ":=" exp — assignment expression without parens.
         // But a ':=' immediately followed by ':' is the E-VO swap operator
