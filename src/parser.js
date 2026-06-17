@@ -22,8 +22,9 @@ function continuesLine(t) {
 }
 
 class Parser {
-  constructor(tokens, filename) {
+  constructor(tokens, filename, opts = {}) {
     this.filename = filename;
+    this.evo = !!opts.evo;   // E-VO extension mode (default: native EC v3.3a)
     this.toks = [];
     let prev = null;
     for (const t of tokens) {
@@ -251,13 +252,20 @@ class Parser {
       this.expect('ident', undefined, 'variable name');
     const decl = { name: name?.value ?? '?', size: null, type: null, init: null };
     if (this.at('[')) {
-      // E-VO multi-dimensional arrays: DEF m[3][3]:ARRAY OF LONG
-      decl.dims = [];
-      while (this.eat('[')) {
-        decl.dims.push(this.parseExp());
+      if (this.evo) {
+        // E-VO multi-dimensional arrays: DEF m[3][3]:ARRAY OF LONG
+        decl.dims = [];
+        while (this.eat('[')) {
+          decl.dims.push(this.parseExp());
+          this.expect(']');
+        }
+        decl.size = decl.dims[0];
+      } else {
+        // native EC: a single dimension
+        this.next();
+        decl.size = this.parseExp();
         this.expect(']');
       }
-      decl.size = decl.dims[0];   // back-compat: single-dim path uses .size
     }
     // '=default' and ':type' occur in either order (corpus: name=NIL:PTR TO LONG)
     for (;;) {
@@ -570,7 +578,7 @@ class Parser {
     // assignment or expression statement
     const exp = this.parseExp();
     // E-VO swap: a :=: b  (lexed as ':=' then an adjacent ':')
-    {
+    if (this.evo) {
       const t0 = this.peek(), t1 = this.peek(1);
       if (t0.type === ':=' && t1.type === ':' && t1.line === t0.line && t1.col === t0.col + 2) {
         this.next(); this.next();
@@ -585,7 +593,7 @@ class Parser {
       return { kind: 'Assign', target: exp, exp: rhs };
     }
     // E-VO compound assignment: desugar 'lval OP= rhs' to 'lval := lval OP rhs'.
-    const ca = this.peekCompoundAssign();
+    const ca = this.evo ? this.peekCompoundAssign() : null;
     if (ca) {
       this.next(); this.next();   // consume the two operator tokens
       const rhs = this.parseExp();
@@ -752,7 +760,7 @@ class Parser {
       exp = { kind: 'But', first: exp, value: rhs };
     }
     // E-VO C-style ternary: cond ? then : else
-    if (this.eat('?')) {
+    if (this.evo && this.eat('?')) {
       const then = this.parseChain();
       this.expect(':');
       const els = this.parseChain();
@@ -770,14 +778,14 @@ class Parser {
       const t = this.peek();
       // E-VO compound assignment (x += 5, a AND= 1, x <<= 3): stop the chain so
       // the statement parser sees 'lval OP= rhs' instead of consuming OP here.
-      if (this.peekCompoundAssign()) break;
+      if (this.evo && this.peekCompoundAssign()) break;
       let op = null, shiftPair = false;
       // E-VO / modern E: an adjacent '<<' / '>>' is a symbol alias for SHL/SHR.
       // Lexed as two '<' / '>' tokens so nested lisp cells still close with
       // '>>'; only pair them outside a cell (cellDepth 0).
       const t2 = this.peek(1);
       // E-VO quick-compare: exp == [v, lo TO hi, ...]  (== lexed as two '=').
-      if (t.type === '=' && t2.type === '=' && t2.line === t.line && t2.col === t.col + 1) {
+      if (this.evo && t.type === '=' && t2.type === '=' && t2.line === t.line && t2.col === t.col + 1) {
         this.next(); this.next();
         this.expect('[');
         const items = [];
@@ -790,19 +798,19 @@ class Parser {
         left = { kind: 'QuickCompare', exp: left, items };
         continue;
       }
-      if ((t.type === '<' || t.type === '>') && this.cellDepth === 0 &&
+      if (this.evo && (t.type === '<' || t.type === '>') && this.cellDepth === 0 &&
         t2.type === t.type && t2.line === t.line && t2.col === t.col + 1) {
         op = t.type === '<' ? 'SHL' : 'SHR';
         shiftPair = true;
       }
-      else if (t.type === '&') op = 'AND';   // E-VO: & is bitwise AND
-      else if (t.type === '|' && t2.type === '|' && this.cellDepth === 0 &&
+      else if (this.evo && t.type === '&') op = 'AND';   // E-VO: & is bitwise AND
+      else if (this.evo && t.type === '|' && t2.type === '|' && this.cellDepth === 0 &&
         t2.line === t.line && t2.col === t.col + 1) { op = 'OR'; shiftPair = true; }   // E-VO: || is bitwise OR
       else if (BINOPS.has(t.type)) op = t.type;
       else if (t.type === 'kw' && KWBINOPS.has(t.value)) op = t.value;
       else if (t.type === 'upper' && ['SHL', 'SHR', 'XOR'].includes(t.value)) op = t.value;
       // E-VO short-circuit boolean operators.
-      else if (t.type === 'upper' && (t.value === 'ANDALSO' || t.value === 'ORELSE')) op = t.value;
+      else if (this.evo && t.type === 'upper' && (t.value === 'ANDALSO' || t.value === 'ORELSE')) op = t.value;
       if (!op) break;
       if (op === '>' && this.cellDepth > 0) break;
       if (op === '|' && this.cellDepth > 0) break;
@@ -851,7 +859,7 @@ class Parser {
   parseItem() {
     const t = this.peek();
     // E-VO / modern E: unary bitwise complement — 'NOT x' or '~x'.
-    if (t.type === 'upper' && t.value === 'NOT') {
+    if (this.evo && t.type === 'upper' && t.value === 'NOT') {
       this.next();
       return { kind: 'Not', exp: this.parseItem() };
     }
@@ -861,7 +869,7 @@ class Parser {
       case 'char': this.next(); return { kind: 'Char', value: t.value };
       case '-': this.next(); return { kind: 'Neg', exp: this.parseItem() };
       case '!': this.next(); return { kind: 'FloatPrefix', exp: this.parseItem() };
-      case '~': this.next(); return { kind: 'Not', exp: this.parseItem() };
+      case '~': if (this.evo) { this.next(); return { kind: 'Not', exp: this.parseItem() }; } break;
       case '(': {
         this.next();
         this.skipNl();
@@ -905,13 +913,13 @@ class Parser {
       }
       case 'ident': case 'ecall': case 'upper': {
         // E-VO predefined macro: _SRCLINE_ -> the current source line number.
-        if (t.value === '_SRCLINE_') { this.next(); return { kind: 'Num', value: t.line }; }
+        if (this.evo && t.value === '_SRCLINE_') { this.next(); return { kind: 'Num', value: t.line }; }
         const ref = this.parseRef();
         // grammar item: var ":=" exp — assignment expression without parens.
         // But a ':=' immediately followed by ':' is the E-VO swap operator
         // (a :=: b); leave it for the statement parser.
         const nx = this.peek(1);
-        const isSwap = nx.type === ':' && nx.line === this.peek().line && nx.col === this.peek().col + 2;
+        const isSwap = this.evo && nx.type === ':' && nx.line === this.peek().line && nx.col === this.peek().col + 2;
         if (this.at(':=') && !isSwap) {
           this.next();
           return { kind: 'AssignExp', target: ref, exp: this.parseChain() };
@@ -1088,9 +1096,9 @@ class Parser {
 
 class TooManyErrors extends Error {}
 
-export function parse(src, filename = '<input>') {
-  const { tokens, errors: lexErrors } = lex(src, filename);
-  const p = new Parser(tokens, filename);
+export function parse(src, filename = '<input>', opts = {}) {
+  const { tokens, errors: lexErrors } = lex(src, filename, opts);
+  const p = new Parser(tokens, filename, opts);
   let program = null;
   try {
     program = p.parseProgram();

@@ -2,8 +2,8 @@ import { test } from './harness.js';
 import { lex } from '../src/lexer.js';
 
 // strip trailing nl+eof for compact comparisons
-function types(src) {
-  const { tokens, errors } = lex(src);
+function types(src, opts) {
+  const { tokens, errors } = lex(src, '<input>', opts);
   if (errors.length) throw new Error('lex errors: ' + JSON.stringify(errors));
   return tokens.slice(0, -2).map(t => t.type);
 }
@@ -12,6 +12,7 @@ function toks(src) {
   if (errors.length) throw new Error('lex errors: ' + JSON.stringify(errors));
   return tokens.slice(0, -2);
 }
+const EVO = { evo: true };
 function one(src) {
   const t = toks(src);
   if (t.length !== 1) throw new Error(`expected 1 token, got ${t.length}: ${JSON.stringify(t)}`);
@@ -34,11 +35,13 @@ test('line comment ->', a => {
   a.deepEqual(types('a -> all of this ignored\nb'), ['ident', 'nl', 'ident']);
 });
 
-test('line comment // (E-VO / modern E)', a => {
-  a.deepEqual(types('a // all of this ignored\nb'), ['ident', 'nl', 'ident']);
+test('line comment // (E-VO mode only)', a => {
+  a.deepEqual(types('a // all of this ignored\nb', EVO), ['ident', 'nl', 'ident']);
   // a lone '/' still divides; '/*' is still a block comment
-  a.deepEqual(types('a / b'), ['ident', '/', 'ident']);
-  a.deepEqual(types('a /* x */ b'), ['ident', 'ident']);
+  a.deepEqual(types('a / b', EVO), ['ident', '/', 'ident']);
+  a.deepEqual(types('a /* x */ b', EVO), ['ident', 'ident']);
+  // in native EC mode, // is NOT a comment (two divide tokens)
+  a.deepEqual(types('a // b'), ['ident', '/', '/', 'ident']);
 });
 
 test('multi-line block comment separates statements', a => {

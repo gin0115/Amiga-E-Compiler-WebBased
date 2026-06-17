@@ -40,6 +40,7 @@ function typeSize(t) {
 export class Codegen {
   constructor(sem) {
     this.sem = sem;
+    this.evo = !!sem.evo;   // E-VO extension mode
     this.a = new Asm();
     this.errors = [];
     this.strings = new Map();   // value -> label

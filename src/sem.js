@@ -444,5 +444,7 @@ export class Sem {
 }
 
 export function analyze(program, opts = {}) {
-  return new Sem().analyze(program, opts);
+  const sem = new Sem();
+  sem.evo = !!opts.evo;   // E-VO extension mode (carried through to codegen)
+  return sem.analyze(program, opts);
 }
