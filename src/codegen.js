@@ -1281,8 +1281,15 @@ export class Codegen {
       a.movel_ind_d(A0, D0);           // element
       a.movel_disp_a(-4, A5, A1);
       a.movel_d_ind(D0, A1);           // ^var := element
-      a.movel_disp_a(-16, A5, A0);
+      a.movel_disp_a(-16, A5, A0);     // quote code address
+      // The quoted expression reads the loop variable at the CALLER's frame
+      // offset, but A5 is this routine's frame — restore the caller's A5 (saved
+      // by LINK at 0(A5)) around the call so the variable resolves correctly.
+      a.movel_a_push(A5);              // save this frame
+      a.movel_disp_d(0, A5, D7);       // D7 = caller's saved A5
+      a.movel_da(D7, A5);              // A5 = caller frame
       a.jsr_ind(A0);                   // run the quoted expression
+      a.movel_pop_a(A5);               // restore this frame
       if (kind === 'map') {
         a.movel_disp_a(-12, A5, A1);
         a.movel_disp_d(-24, A5, D4);
