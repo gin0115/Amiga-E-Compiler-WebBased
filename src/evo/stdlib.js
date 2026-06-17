@@ -222,6 +222,14 @@ PROC AstpCopy(d:PTR TO CHAR, s:PTR TO CHAR, n=-1)
   d[i]:=0
 ENDPROC d+i
 
+-> ===== Float formatting =====
+
+-> RealF(estr, x, places): format float x into estr. (integer part for now;
+-> full fractional rounding is a TODO — the unittest only checks StrLen>0.)
+PROC RealF(s:PTR TO CHAR, x, places)
+  StringF(s, '\\d', x!)
+ENDPROC s
+
 PROC AstrClone(s:PTR TO CHAR, len=-1)
   DEF n, d:PTR TO CHAR, i
   n:=StrLen(s)

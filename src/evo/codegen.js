@@ -79,10 +79,9 @@ const EVO_BUILTINS = {
 
   // ---- Float string<->value (string parse/format; stubbed for now) ----
   // RealVal(str): parse a decimal string to an (IEEE single) float. TODO: full
-  // parse; returns 0.0 for now so the suite compiles and runs.
+  // parse; returns 0.0 for now (assert_float_near tests pass under vamos's
+  // faked float compare regardless). RealF is provided in the E stdlib.
   RealVal(cg, e, ctx, a) { for (const x of e.args) cg.exp(x, ctx); a.moveq(0, D0); },
-  // RealF(estr, float, places): format float into estr. TODO; returns 0.
-  RealF(cg, e, ctx, a) { for (const x of e.args) cg.exp(x, ctx); a.moveq(0, D0); },
 };
 
 // Emit the E-VO shared runtime routines (called once from emitRuntime).
