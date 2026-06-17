@@ -20,6 +20,8 @@ export const KEYWORDS = new Set([
   'EXITN', 'CONT', 'CONTN',
   // E-VO unary size/offset operators.
   'PSIZEOF', 'ARRAYSIZE', 'OFFSETOF',
+  // E-VO object unions.
+  'UNION', 'ENDUNION',
 ]);
 
 // Compile-time character escapes (ch_2F). Runtime format codes (\d \h \s \c

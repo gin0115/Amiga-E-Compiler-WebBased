@@ -292,12 +292,49 @@ class Parser {
     let access = this.eat('kw', 'PRIVATE') ? 'private' : null;
     this.expectNl();
     const members = [];
+    let unionCounter = 0;
     this.skipNl();
     while (!this.atKw('ENDOBJECT') && !this.at('eof')) {
       // PRIVATE/PUBLIC may stand alone or prefix members on the same line
       if (this.atKw('PRIVATE') || this.atKw('PUBLIC')) {
         access = this.next().value === 'PRIVATE' ? 'private' : 'public';
         if (this.at('nl')) { this.next(); this.skipNl(); continue; }
+      }
+      // E-VO UNION: overlapping member groups. Each [..] group lays its members
+      // sequentially from the union base; groups overlap; size = max group.
+      if (this.atKw('UNION')) {
+        this.next();
+        const uid = ++unionCounter;
+        this.skipNl();
+        // optional outer bracket form: UNION [ [..],[..] ]
+        let outer = false;
+        if (this.at('[') && this.peek(1).type === '[') { this.next(); this.skipNl(); outer = true; }
+        else if (this.at('[')) {
+          // disambiguate a lone outer '[' from a group '[': look past newlines
+          let j = 1; while (this.peek(j).type === 'nl') j++;
+          if (this.peek(j).type === '[') { this.next(); this.skipNl(); outer = true; }
+        }
+        let group = 0;
+        while (this.at('[')) {
+          this.next();   // group open '['
+          this.skipNl();
+          while (!this.at(']') && !this.at('eof')) {
+            const m = this.parseVarDecl();
+            m.access = access; m.unionId = uid; m.unionGroup = group;
+            members.push(m);
+            if (!this.eat(',')) this.skipNl();
+            this.skipNl();
+          }
+          this.expect(']');
+          group++;
+          this.eat(',');
+          this.skipNl();
+        }
+        if (outer) { this.expect(']'); this.skipNl(); }
+        this.expect('kw', 'ENDUNION');
+        this.expectNl();
+        this.skipNl();
+        continue;
       }
       {
         do {

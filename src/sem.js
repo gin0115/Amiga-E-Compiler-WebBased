@@ -210,13 +210,34 @@ export class Sem {
     if (d.of && !parent) this.warn(d, `unknown parent object ${d.of}`);
     const members = new Map(parent ? parent.members : []);
     let offset = parent ? parent.size : 0;
-    for (const m of d.members) {
+    const place = (m, at) => {
       const size = typeSize(m.type);
       const count = m.size ? (this.foldConst(m.size) ?? 1) : 1;
-      // align INT/LONG members to even addresses like ec does
-      if (size > 1 && (offset & 1)) offset++;
-      members.set(m.name, { offset, size, type: m.type, count });
-      offset += size * count;
+      if (size > 1 && (at & 1)) at++;   // align INT/LONG to even like ec
+      members.set(m.name, { offset: at, size, type: m.type, count });
+      return at + size * count;
+    };
+    for (let i = 0; i < d.members.length;) {
+      const m = d.members[i];
+      if (m.unionId === undefined) {
+        offset = place(m, offset);
+        i++;
+        continue;
+      }
+      // E-VO UNION: each group lays out from the union base; size = max group.
+      const uid = m.unionId;
+      if (offset & 1) offset++;
+      const base = offset;
+      let end = base, cur = null, g = base;
+      let j = i;
+      for (; j < d.members.length && d.members[j].unionId === uid; j++) {
+        const um = d.members[j];
+        if (um.unionGroup !== cur) { cur = um.unionGroup; g = base; }
+        g = place(um, g);
+        if (g > end) end = g;
+      }
+      offset = end;
+      i = j;
     }
     if (offset & 1) offset++;
     this.objects.set(d.name, { name: d.name, of: d.of, members, size: offset });
