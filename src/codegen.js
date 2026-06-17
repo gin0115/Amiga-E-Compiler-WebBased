@@ -1672,6 +1672,7 @@ export class Codegen {
     // Top-level static data: labels (lp:) and LONG/INT/CHAR data declarations.
     for (const d of [...this.program.decls, ...(this.sem.importedDecls ?? [])]) {
       if (d.kind === 'Label') {
+        a.align();                 // co-locate the label with its (aligned) data
         a.label(`user_${d.name}`);
       } else if (d.kind === 'Data') {
         const sz = d.type === 'CHAR' ? 1 : d.type === 'INT' ? 2 : 4;
