@@ -121,7 +121,7 @@ export class Codegen {
           this.globalInits.push({ slot, buf, kind: 'STRING', count });
         } else if (base === 'ARRAY' || !base) {
           const buf = this.globalSize;
-          this.globalSize += (count * typeSize(v.type?.of) + 1) & ~1;
+          this.globalSize += (count * this.elemSize(v.type?.of) + 1) & ~1;
           this.globalInits.push({ slot, buf, kind: 'ARRAY', count });
         } else {
           this.err(d, `unsupported sized global type ${base} for ${v.name}`);
@@ -1789,7 +1789,7 @@ export class Codegen {
           frame += 4 + count * 4;
           inits.push({ buf: -frame, slot: ctx.locals.get(v.name), kind: 'LIST', count });
         } else if (base === 'ARRAY' || !base) {
-          const esize = typeSize(v.type?.of);
+          const esize = this.elemSize(v.type?.of);   // OBJECT/BYTE/WORD aware
           frame += (count * esize + 1) & ~1;
           inits.push({ buf: -frame, slot: ctx.locals.get(v.name), kind: 'ARRAY', count });
         } else {
@@ -1914,8 +1914,8 @@ export class Codegen {
 
   elemSize(t) {
     if (!t) return 4;
-    if (t.base === 'CHAR') return 1;
-    if (t.base === 'INT') return 2;
+    if (t.base === 'CHAR' || t.base === 'BYTE') return 1;
+    if (t.base === 'INT' || t.base === 'WORD') return 2;
     if (t.base === 'OBJECT') return this.sem.objects.get(t.name)?.size ?? 4;
     return 4;
   }
