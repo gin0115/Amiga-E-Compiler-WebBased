@@ -2421,6 +2421,24 @@ export class Codegen {
       case 'Bin': case 'FloatConv': case 'FloatPrefix':
         this.fchain(e, ctx, { f: false });
         break;
+      case 'Logical': {   // E-VO ANDALSO / ORELSE — short-circuit, result -1/0
+        const end = this.uniq('scend');
+        if (e.op === 'ANDALSO') {
+          const f = this.uniq('scfalse');
+          this.exp(e.l, ctx); a.tstl(D0); a.beq(f);
+          this.exp(e.r, ctx); a.tstl(D0); a.beq(f);
+          a.moveq(-1, D0); a.bra(end);
+          a.label(f); a.moveq(0, D0);
+        } else {   // ORELSE
+          const tr = this.uniq('sctrue');
+          this.exp(e.l, ctx); a.tstl(D0); a.bne(tr);
+          this.exp(e.r, ctx); a.tstl(D0); a.bne(tr);
+          a.moveq(0, D0); a.bra(end);
+          a.label(tr); a.moveq(-1, D0);
+        }
+        a.label(end);
+        break;
+      }
       case 'AssignExp':
         this.exp(e.exp, ctx);
         if (e.target.kind === 'Var') this.storeVar(e.target.name, ctx, e);

@@ -697,6 +697,8 @@ class Parser {
       else if (BINOPS.has(t.type)) op = t.type;
       else if (t.type === 'kw' && KWBINOPS.has(t.value)) op = t.value;
       else if (t.type === 'upper' && ['SHL', 'SHR', 'XOR'].includes(t.value)) op = t.value;
+      // E-VO short-circuit boolean operators.
+      else if (t.type === 'upper' && (t.value === 'ANDALSO' || t.value === 'ORELSE')) op = t.value;
       if (!op) break;
       if (op === '>' && this.cellDepth > 0) break;
       if (op === '|' && this.cellDepth > 0) break;
@@ -708,7 +710,10 @@ class Parser {
         continue;
       }
       const right = this.parseItem();
-      left = { kind: 'Bin', op, l: left, r: right };
+      // ANDALSO/ORELSE short-circuit — distinct node so codegen branches
+      // instead of eagerly evaluating both operands.
+      if (op === 'ANDALSO' || op === 'ORELSE') left = { kind: 'Logical', op, l: left, r: right };
+      else left = { kind: 'Bin', op, l: left, r: right };
     }
     return left;
   }
