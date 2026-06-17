@@ -3161,6 +3161,15 @@ export class Codegen {
         a.label(end);
         return;
       }
+      if (callee.name === 'Div') {        // 32-bit signed divide (vs / which is 16-bit)
+        this.exp(e.args[0], ctx);
+        a.movel_d_push(D0);
+        this.exp(e.args[1], ctx);
+        a.movel_dd(D0, D1);
+        a.movel_pop_d(D0);
+        a.bsr('__sdivmod');               // D0 = quotient
+        return;
+      }
       if (callee.name === 'Sign') {       // -1 / 0 / 1 of a signed value
         this.exp(e.args[0], ctx);
         const pos = this.uniq('sgnp'), end = this.uniq('sgnend');
