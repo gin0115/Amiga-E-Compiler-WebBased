@@ -210,13 +210,37 @@ export class Sem {
     if (d.of && !parent) this.warn(d, `unknown parent object ${d.of}`);
     const members = new Map(parent ? parent.members : []);
     let offset = parent ? parent.size : 0;
-    for (const m of d.members) {
+    const place = (m, at) => {
       const size = typeSize(m.type);
       const count = m.size ? (this.foldConst(m.size) ?? 1) : 1;
-      // align INT/LONG members to even addresses like ec does
-      if (size > 1 && (offset & 1)) offset++;
-      members.set(m.name, { offset, size, type: m.type, count });
-      offset += size * count;
+      if (size > 1 && (at & 1)) at++;   // align INT/LONG to even like ec
+      // ARRAY/OBJECT members are EMBEDDED: accessing them yields their address
+      // (size 0), not a loaded value, so obj.arr[i] indexes the inline storage.
+      const embedded = m.type?.base === 'ARRAY' || m.type?.base === 'OBJECT';
+      members.set(m.name, { offset: at, size: embedded ? 0 : size, type: m.type, count });
+      return at + size * count;
+    };
+    for (let i = 0; i < d.members.length;) {
+      const m = d.members[i];
+      if (m.unionId === undefined) {
+        offset = place(m, offset);
+        i++;
+        continue;
+      }
+      // E-VO UNION: each group lays out from the union base; size = max group.
+      const uid = m.unionId;
+      if (offset & 1) offset++;
+      const base = offset;
+      let end = base, cur = null, g = base;
+      let j = i;
+      for (; j < d.members.length && d.members[j].unionId === uid; j++) {
+        const um = d.members[j];
+        if (um.unionGroup !== cur) { cur = um.unionGroup; g = base; }
+        g = place(um, g);
+        if (g > end) end = g;
+      }
+      offset = end;
+      i = j;
     }
     if (offset & 1) offset++;
     this.objects.set(d.name, { name: d.name, of: d.of, members, size: offset });
@@ -231,6 +255,7 @@ export class Sem {
       case 'Float': return e.value;
       case 'Nil': return 0;
       case 'Neg': { const v = this.foldConst(e.exp); return v === null ? null : -v | 0; }
+      case 'Not': { const v = this.foldConst(e.exp); return v === null ? null : ~v | 0; }
       case 'Var': {
         if (this.consts.has(e.name)) return this.consts.get(e.name);
         return null;
@@ -309,8 +334,13 @@ export class Sem {
         if (s.step) this.checkExp(s.step, scope, p);
         walk(s.body);
         break;
-      case 'While': case 'Repeat': this.checkExp(s.cond, scope, p); walk(s.body); break;
+      case 'While':
+        for (const b of s.branches) { this.checkExp(b.cond, scope, p); walk(b.body); }
+        if (s.always) walk(s.always);
+        break;
+      case 'Repeat': this.checkExp(s.cond, scope, p); walk(s.body); break;
       case 'Loop': walk(s.body); break;
+      case 'Try': walk(s.body); walk(s.catch); break;   // E-VO block exceptions
       case 'Select':
         this.checkExp(s.subject, scope, p);
         if (s.of) this.checkExp(s.of, scope, p);
@@ -325,15 +355,28 @@ export class Sem {
         walk(s.default);
         break;
       case 'Return': for (const e of s.exps) this.checkExp(e, scope, p); break;
-      case 'Exit': if (s.cond) this.checkExp(s.cond, scope, p); break;
+      case 'Exit': case 'Cont': if (s.cond) this.checkExp(s.cond, scope, p); break;
+      case 'Swap': this.checkExp(s.a, scope, p); this.checkExp(s.b, scope, p); break;
       case 'Inc': case 'Dec': this.checkExp(s.lval, scope, p); break;
-      case 'NewStat': for (const t of s.targets) this.checkExp(t, scope, p); break;
+      case 'NewStat': for (const t of s.targets) this.checkNewTarget(t, scope, p); break;
       case 'EndStat': for (const t of s.targets) this.checkExp(t, scope, p); break;
       case 'Void': this.checkExp(s.exp, scope, p); break;
       case 'Data': for (const v of s.values) this.checkExp(v, scope, p); break;
       case 'Jump': case 'Label': case 'Asm': case 'Incbin': case 'Preproc': break;
       default: break;
     }
+  }
+
+  // A NEW target may be an OBJECT type name (E-VO: NEW objtype [.ctor(args)]),
+  // which is not a variable — only validate the constructor arguments then.
+  checkNewTarget(lval, scope, p) {
+    if (lval.kind === 'Var' && this.objects.has(lval.name)) return;
+    if (lval.kind === 'Call' && lval.callee?.kind === 'Member' &&
+      lval.callee.obj?.kind === 'Var' && this.objects.has(lval.callee.obj.name)) {
+      for (const a of lval.args) this.checkExp(a, scope, p);
+      return;
+    }
+    this.checkExp(lval, scope, p);
   }
 
   checkVar(name, node, scope, p) {
@@ -371,8 +414,15 @@ export class Sem {
         for (const a of e.args) this.checkExp(a, scope, p);
         break;
       }
-      case 'Bin': this.checkExp(e.l, scope, p); this.checkExp(e.r, scope, p); break;
-      case 'Neg': case 'FloatConv': case 'FloatPrefix': case 'Quote': case 'Paren': this.checkExp(e.exp, scope, p); break;
+      case 'Bin': case 'Logical': this.checkExp(e.l, scope, p); this.checkExp(e.r, scope, p); break;
+      case 'QuickCompare':   // E-VO  exp == [v, lo TO hi, ...]
+        this.checkExp(e.exp, scope, p);
+        for (const it of e.items) {
+          if (it.val !== undefined) this.checkExp(it.val, scope, p);
+          else { this.checkExp(it.from, scope, p); this.checkExp(it.to, scope, p); }
+        }
+        break;
+      case 'Neg': case 'Not': case 'FloatConv': case 'FloatPrefix': case 'Quote': case 'Paren': this.checkExp(e.exp, scope, p); break;
       case 'AssignExp': this.checkExp(e.target, scope, p); this.checkExp(e.exp, scope, p); break;
       case 'Ternary': this.checkExp(e.cond, scope, p); this.checkExp(e.then, scope, p); this.checkExp(e.else, scope, p); break;
       case 'List': for (const i of e.items) this.checkExp(i, scope, p); break;
@@ -385,7 +435,7 @@ export class Sem {
       case 'Cast': this.checkExp(e.obj, scope, p); break;
       case 'PostInc': case 'PostDec': this.checkExp(e.obj, scope, p); break;
       case 'Deref': this.checkExp(e.lval, scope, p); break;
-      case 'New': this.checkExp(e.lval, scope, p); break;
+      case 'New': this.checkNewTarget(e.lval, scope, p); break;
       case 'NewList': this.checkExp(e.list, scope, p); break;
       case 'AddrOf': break; // {x} may reference labels resolved at codegen
       case 'But': this.checkExp(e.first, scope, p); this.checkExp(e.value, scope, p); break;
@@ -398,5 +448,7 @@ export class Sem {
 }
 
 export function analyze(program, opts = {}) {
-  return new Sem().analyze(program, opts);
+  const sem = new Sem();
+  sem.evo = !!opts.evo;   // E-VO extension mode (carried through to codegen)
+  return sem.analyze(program, opts);
 }

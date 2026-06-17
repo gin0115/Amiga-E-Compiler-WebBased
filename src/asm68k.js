@@ -75,10 +75,14 @@ export class Asm {
   moveb_imm_postinc(imm, an) { this.w16(0x1cfc & 0 | 0x10fc | an << 9); this.w16(imm & 0xff); } // move.b #i,(Am)+
 
   // ---- lea / pea ----
+  // Load a label's address. Emitted as `lea xxx.L,An` (absolute long + reloc)
+  // rather than `lea d16(PC),An`, so it reaches anywhere in the hunk — large
+  // programs (e.g. the 107KB EVO unittests) exceed the ±32KB PC-relative range.
+  // 68000-safe; behaviourally identical (same effective address).
   lea_pc(label, an) {
-    this.w16(0x41fa | an << 9);
-    this.fixups.push({ at: this.pc, label, kind: 'pc16' });
-    this.w16(0);
+    this.w16(0x41f9 | an << 9);                          // lea xxx.L,An
+    this.fixups.push({ at: this.pc, label, kind: 'abs32' });
+    this.w32(0);
   }
   lea_disp(d, src, an) { this.w16(0x41e8 | an << 9 | src); this.w16(d); } // lea d16(Am),An
 
@@ -114,6 +118,10 @@ export class Asm {
   swap(dn) { this.w16(0x4840 | dn); }
   asll_d(dq, dn) { this.w16(0xe1a0 | dq << 9 | dn); }   // asl.l Dq,Dn
   asrl_d(dq, dn) { this.w16(0xe0a0 | dq << 9 | dn); }   // asr.l Dq,Dn
+  lsll_d(dq, dn) { this.w16(0xe1a8 | dq << 9 | dn); }   // lsl.l Dq,Dn
+  lsrl_d(dq, dn) { this.w16(0xe0a8 | dq << 9 | dn); }   // lsr.l Dq,Dn
+  roll_d(dq, dn) { this.w16(0xe1b8 | dq << 9 | dn); }   // rol.l Dq,Dn
+  rorl_d(dq, dn) { this.w16(0xe0b8 | dq << 9 | dn); }   // ror.l Dq,Dn
   eorl_dd(src, dst) { this.w16(0xb180 | src << 9 | dst); } // eor.l Ds,Dd
 
   // ---- immediate byte/word ops and extra moves for the runtime ----
@@ -172,7 +180,14 @@ export class Asm {
     this.w16(0);
   }
   bra(label) { this.bcc(0, label); }
-  bsr(label) { this.bcc(1, label); }
+  // Subroutine call. Emitted as `jsr xxx.L` (absolute long + reloc) rather than
+  // `bsr.W`, so it reaches anywhere in the hunk — large programs exceed the
+  // ±32KB range of a PC-relative bsr. 68000-safe; same effect.
+  bsr(label) {
+    this.w16(0x4eb9);                                    // jsr xxx.L
+    this.fixups.push({ at: this.pc, label, kind: 'abs32' });
+    this.w32(0);
+  }
   beq(label) { this.bcc(7, label); }
   bne(label) { this.bcc(6, label); }
   jsr_disp(d, an) { this.w16(0x4ea8 | an); this.w16(d); }

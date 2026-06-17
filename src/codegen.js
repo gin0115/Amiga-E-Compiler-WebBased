@@ -14,6 +14,7 @@ import { writeHunk } from './hunk.js';
 import { AsmText } from './asmtext.js';
 import { ifuncName } from './ifuncs.js';
 import { IFUNC_THUNKS } from './ifunc_thunks.js';
+import { evoBuiltin, emitEvoRuntime } from './evo/codegen.js';
 
 const D0 = 0, D1 = 1, D2 = 2, D3 = 3, D4 = 4, D5 = 5, D6 = 6, D7 = 7;
 const A0 = 0, A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, A6 = 6, A7 = 7;
@@ -31,8 +32,8 @@ const CMP_COND = { '=': 'EQ', '<>': 'NE', '<': 'LT', '>': 'GT', '<=': 'LE', '>='
 function typeSize(t) {
   if (!t) return 1; // bare ARRAY defaults to ARRAY OF CHAR (ch_8)
   switch (t.base) {
-    case 'CHAR': return 1;
-    case 'INT': return 2;
+    case 'CHAR': case 'BYTE': return 1;   // BYTE: E-VO signed 8-bit
+    case 'INT': case 'WORD': return 2;    // WORD: E-VO unsigned 16-bit
     default: return 4;
   }
 }
@@ -40,6 +41,7 @@ function typeSize(t) {
 export class Codegen {
   constructor(sem) {
     this.sem = sem;
+    this.evo = !!sem.evo;   // E-VO extension mode
     this.a = new Asm();
     this.errors = [];
     this.strings = new Map();   // value -> label
@@ -62,6 +64,7 @@ export class Codegen {
     ]);
     this.globalSize = 32;
     this.globalTypes = new Map();
+    this.globalArrayDims = new Map();   // E-VO multi-dim global arrays: name -> [dims]
   }
 
   err(node, msg) { this.errors.push({ line: node?.line, msg }); }
@@ -82,6 +85,7 @@ export class Codegen {
 
   compile(program) {
     const a = this.a;
+    this.program = program;
     if ((program.opts ?? []).some(o => /^MODULE/.test(o))) {
       this.err(null, 'OPT MODULE sources produce no executable (module output not yet supported)');
       return null;
@@ -98,7 +102,16 @@ export class Codegen {
         if (v.type) this.globalTypes.set(v.name, v.type);
         if (!v.size) continue;
         // sized globals get buffers in the globals area, wired at startup
-        const count = this.sem.foldConst(v.size);
+        let count;
+        if (v.dims && v.dims.length > 1) {
+          const dimsC = v.dims.map(x => this.sem.foldConst(x));
+          if (dimsC.some(x => x === null)) { this.err(d, `dimensions of global ${v.name} must be constant`); continue; }
+          this.globalArrayDims.set(v.name, dimsC);
+          count = dimsC.reduce((pp, x) => pp * x, 1);
+        } else {
+          count = this.sem.foldConst(v.size);
+          if (v.dims) this.globalArrayDims.set(v.name, [count]);
+        }
         if (count === null) { this.err(d, `size of global ${v.name} must be constant`); continue; }
         const base = v.type?.base;
         if (base === 'STRING' || base === 'LIST') {
@@ -108,7 +121,7 @@ export class Codegen {
           this.globalInits.push({ slot, buf, kind: 'STRING', count });
         } else if (base === 'ARRAY' || !base) {
           const buf = this.globalSize;
-          this.globalSize += (count * typeSize(v.type?.of) + 1) & ~1;
+          this.globalSize += (count * this.elemSize(v.type?.of) + 1) & ~1;
           this.globalInits.push({ slot, buf, kind: 'ARRAY', count });
         } else {
           this.err(d, `unsupported sized global type ${base} for ${v.name}`);
@@ -121,7 +134,7 @@ export class Codegen {
     for (const g of ['arg', 'stdin', 'conout', 'stdrast', 'wbmessage']) this.globalSlot(g);
     // mathieeesingtrans.library is disk-based: only open when F-functions
     // are used (singbas is ROM-resident and cheap, opened always)
-    this.usesTrans = /"name":"F(sin|cos|tan|exp|log|log10|pow|sqrt|atan|asin|acos)"/
+    this.usesTrans = /"name":"F(sin|cos|tan|exp|log|log10|pow|sqrt|atan|asin|acos|sinh|cosh|tanh|tieee|fieee)"/
       .test(JSON.stringify(program));
     // a linked binary module may itself call a transcendental intrinsic
     // (Fsin/Fcos/…) — open mathieeesingtrans for it too
@@ -516,6 +529,8 @@ export class Codegen {
 
   emitRuntime() {
     const a = this.a;
+    // E-VO stdlib runtime routines (gated; native output is unchanged)
+    if (this.evo) emitEvoRuntime(this);
 
     // __udivmod: d0/d1 unsigned -> quotient d0, remainder d1
     a.label('__udivmod');
@@ -649,9 +664,14 @@ export class Codegen {
     a.bne('__wf_lit');
     a.moveb_postinc_d(A0, D0);
     a.tstb(D0);
-    a.beq('__wf_done');
+    a.bne('__wf_code');
+    a.moveb_imm_postinc(0x5c, A2);     // trailing '\' -> emit it literally
+    a.bra('__wf_done');
+    a.label('__wf_code');
     a.cmpib_imm(100, D0);              // 'd'
     a.beq('__wf_dec');
+    a.cmpib_imm(117, D0);              // 'u' — unsigned decimal
+    a.beq('__wf_unsigned');
     a.cmpib_imm(115, D0);              // 's'
     a.beq('__wf_str');
     a.cmpib_imm(99, D0);               // 'c'
@@ -680,6 +700,29 @@ export class Codegen {
     a.movel_dd(D6, D1);
     a.bsr('__wf_padto');               // emit max(0, width-count) pad chars
     a.bsr('__itoa');                   // render the magnitude
+    a.bra('__wf_loop');
+    // \u[n] — UNSIGNED decimal (0..4294967295), zero-padded to min width n.
+    a.label('__wf_unsigned');
+    a.bsr('__wf_getwidth');            // D5 = field width
+    a.movel_ind_d(A1, D0);             // value (unsigned)
+    a.subql_a(4, A1);
+    a.moveq(0, D6);                    // digit count
+    a.label('__wfu_div');
+    a.moveq(10, D1);
+    a.bsr('__udivmod');                // D0 = quotient, D1 = remainder (0-9)
+    a.movel_d_push(D1);                // stack the remainder
+    a.addql(1, D6);
+    a.tstl(D0);
+    a.bne('__wfu_div');
+    a.movel_dd(D6, D1);                // pad to width with leading '0'
+    a.moveq(48, D4);
+    a.bsr('__wf_padto');
+    a.label('__wfu_emit');
+    a.movel_pop_d(D1);                 // remainder, emit reversed
+    a.moveq(48, D0); a.addl_dd(D0, D1);
+    a.moveb_d_postinc(D1, A2);
+    a.subql(1, D6);
+    a.bne('__wfu_emit');
     a.bra('__wf_loop');
     // \h[n] — hex (uppercase), zero-padded to MINIMUM width n (never truncated).
     a.label('__wf_hex');
@@ -893,27 +936,32 @@ export class Codegen {
     a.label('__new_done');
     a.rts();
 
-    // __dispose: d0=data ptr (NIL ok) → d0=NIL
+    // __dispose: d0=data ptr (NIL ok) → d0=NIL. The chain (head@8(A4)) holds
+    // __new nodes [next.l, size.l, data...]. The data pointer is node+8 for a
+    // NEW object, but node+16 for a complex estring/list (extra 8-byte estring
+    // header). Match either offset so DisposeLink frees the RIGHT node with the
+    // RIGHT size — a wrong match used to FreeMem garbage and corrupt the heap.
     a.label('__dispose');
+    a.movel_d_push(D2);                // preserve callee-saved D2
     a.tstl(D0);
     a.beq('__di_done');
-    a.subql(8, D0);
-    a.movel_da(D0, A1);                // base
-    a.lea_disp(8, A4, A0);             // &head
+    a.lea_disp(8, A4, A0);             // A0 = &head slot
     a.label('__di_loop');
-    a.movel_ind_d(A0, D1);
-    a.beq('__di_done');                // not in chain: ignore
-    a.cmpl_dd(D0, D1);
-    a.beq('__di_unlink');
-    a.movel_da(D1, A0);                // candidate's next-slot is its first long
+    a.movel_ind_d(A0, D1);             // D1 = node
+    a.beq('__di_done');                // end of chain: not found, ignore
+    a.movel_dd(D1, D2); a.addql(8, D2); a.cmpl_dd(D0, D2); a.beq('__di_unlink');   // node+8 == P?
+    a.addql(8, D2); a.cmpl_dd(D0, D2); a.beq('__di_unlink');                        // node+16 == P?
+    a.movel_da(D1, A0);                // advance: A0 = node (its first long = next)
     a.bra('__di_loop');
     a.label('__di_unlink');
-    a.movel_ind_d(A1, D1);             // base->next
-    a.movel_d_ind(D1, A0);             // prev->next = base->next
+    a.movel_da(D1, A1);                // A1 = node (for FreeMem)
+    a.movel_ind_d(A1, D2);             // D2 = node->next
+    a.movel_d_ind(D2, A0);             // prev->next = node->next
     a.movel_disp_d(4, A1, D0);         // total size
     a.movel_absw_a(4, A6);
     a.jsr_disp(-210, A6);              // FreeMem(a1, d0)
     a.label('__di_done');
+    a.movel_pop_d(D2);                 // restore D2
     a.moveq(0, D0);
     a.rts();
 
@@ -1241,7 +1289,7 @@ export class Codegen {
     // quote-driven list functions (ch_9C): d0=varaddr, d1=src, d2=dest,
     // d3=code. State lives in the frame: quoted code clobbers D0-D6/A0-A3.
     for (const [name, kind] of [['__maplist', 'map'], ['__selectlist', 'sel'],
-      ['__forall', 'all'], ['__exists', 'any']]) {
+      ['__forall', 'all'], ['__exists', 'any'], ['__selectfirst', 'first']]) {
       a.label(name);
       a.link(A5, 28);
       a.movel_d_disp(D0, -4, A5);      // varaddr
@@ -1266,8 +1314,15 @@ export class Codegen {
       a.movel_ind_d(A0, D0);           // element
       a.movel_disp_a(-4, A5, A1);
       a.movel_d_ind(D0, A1);           // ^var := element
-      a.movel_disp_a(-16, A5, A0);
+      a.movel_disp_a(-16, A5, A0);     // quote code address
+      // The quoted expression reads the loop variable at the CALLER's frame
+      // offset, but A5 is this routine's frame — restore the caller's A5 (saved
+      // by LINK at 0(A5)) around the call so the variable resolves correctly.
+      a.movel_a_push(A5);              // save this frame
+      a.movel_disp_d(0, A5, D7);       // D7 = caller's saved A5
+      a.movel_da(D7, A5);              // A5 = caller frame
       a.jsr_ind(A0);                   // run the quoted expression
+      a.movel_pop_a(A5);               // restore this frame
       if (kind === 'map') {
         a.movel_disp_a(-12, A5, A1);
         a.movel_disp_d(-24, A5, D4);
@@ -1292,6 +1347,17 @@ export class Codegen {
         a.tstl(D0);
         a.bne(name + '_next');
         a.moveq(0, D0);
+        a.unlk(A5);
+        a.rts();
+      } else if (kind === 'first') {
+        // E-VO SelectFirst: return the first element whose expr is true
+        a.tstl(D0);
+        a.beq(name + '_next');
+        a.movel_disp_a(-8, A5, A0);    // src
+        a.movel_disp_d(-24, A5, D4);   // i
+        a.asll_imm(2, D4);
+        a.addal_d(D4, A0);
+        a.movel_ind_d(A0, D0);         // element
         a.unlk(A5);
         a.rts();
       } else {
@@ -1636,6 +1702,22 @@ export class Codegen {
       a.label(lst.label);        // the list pointer aims here
       a.space(lst.bytes);
     }
+    // Top-level static data: labels (lp:) and LONG/INT/CHAR data declarations.
+    for (const d of [...this.program.decls, ...(this.sem.importedDecls ?? [])]) {
+      if (d.kind === 'Label') {
+        a.align();                 // co-locate the label with its (aligned) data
+        a.label(`user_${d.name}`);
+      } else if (d.kind === 'Data') {
+        const sz = d.type === 'CHAR' ? 1 : d.type === 'INT' ? 2 : 4;
+        if (sz > 1) a.align();
+        for (const v of d.values) {
+          const n = this.sem.foldConst(v) ?? 0;
+          if (sz === 1) a.w8(n & 0xff);
+          else if (sz === 2) a.w16(n & 0xffff);
+          else a.w32(n >>> 0);
+        }
+      }
+    }
     a.align();
     a.label('__globals');
     // A4 = __globals + A4_ORIGIN; standard globals occupy [origin-96, origin),
@@ -1659,6 +1741,8 @@ export class Codegen {
       nargs: args.length,
       epilogue: this.uniq('ep'),
       loopEnds: [],
+      loopConts: [],   // CONT targets (parallel to loopEnds)
+      arrayDims: new Map(),   // name -> [dim sizes] for E-VO multi-dim arrays
     };
     for (const arg of args) if (arg.type) ctx.types.set(arg.name, arg.type);
     let frame = 0;
@@ -1685,7 +1769,17 @@ export class Codegen {
         }
         // sized declarations get a frame buffer; the variable holds a
         // pointer to it, set up at procedure entry
-        const count = this.sem.foldConst(v.size);
+        // E-VO multi-dim: total element count = product of all dimensions.
+        let count, dimsC = null;
+        if (v.dims && v.dims.length > 1) {
+          dimsC = v.dims.map(d => this.sem.foldConst(d));
+          if (dimsC.some(d => d === null)) { this.err(s, `dimensions of ${v.name} must be constant`); continue; }
+          ctx.arrayDims.set(v.name, dimsC);
+          count = dimsC.reduce((p, d) => p * d, 1);
+        } else {
+          count = this.sem.foldConst(v.size);
+          if (v.dims) ctx.arrayDims.set(v.name, [count]);
+        }
         if (count === null) { this.err(s, `size of ${v.name} must be constant`); continue; }
         const base = v.type?.base;
         if (base === 'STRING') {
@@ -1695,7 +1789,7 @@ export class Codegen {
           frame += 4 + count * 4;
           inits.push({ buf: -frame, slot: ctx.locals.get(v.name), kind: 'LIST', count });
         } else if (base === 'ARRAY' || !base) {
-          const esize = typeSize(v.type?.of);
+          const esize = this.elemSize(v.type?.of);   // OBJECT/BYTE/WORD aware
           frame += (count * esize + 1) & ~1;
           inits.push({ buf: -frame, slot: ctx.locals.get(v.name), kind: 'ARRAY', count });
         } else {
@@ -1820,8 +1914,8 @@ export class Codegen {
 
   elemSize(t) {
     if (!t) return 4;
-    if (t.base === 'CHAR') return 1;
-    if (t.base === 'INT') return 2;
+    if (t.base === 'CHAR' || t.base === 'BYTE') return 1;
+    if (t.base === 'INT' || t.base === 'WORD') return 2;
     if (t.base === 'OBJECT') return this.sem.objects.get(t.name)?.size ?? 4;
     return 4;
   }
@@ -1844,15 +1938,92 @@ export class Codegen {
       return 4;
     }
     if (e.kind === 'Index') {
+      // multi-dim array (m[i][j]...): a full index yields an element whose size
+      // is the array's element type (typeOf doesn't track it through the chain).
+      const idxs = []; let n = e;
+      while (n.kind === 'Index' && n.idx) { idxs.unshift(n.idx); n = n.obj; }
+      if (n.kind === 'Var') {
+        const dims = this.arrayDimsOf(n.name, ctx);
+        if (dims && dims.length >= 2 && idxs.length >= dims.length) {
+          const vt = ctx.types.get(n.name) ?? this.globalTypes.get(n.name);
+          return typeSize(vt?.of);
+        }
+      }
       const t = this.typeOf(e, ctx);
-      if (t?.base === 'CHAR') return 1;
-      if (t?.base === 'INT') return 2;
+      if (t?.base === 'CHAR' || t?.base === 'BYTE') return 1;
+      if (t?.base === 'INT' || t?.base === 'WORD') return 2;
       return 4;
     }
     return 4;
   }
 
   // compute the address of a memory lvalue into A0; returns byte offset
+  // SIZEOF/PSIZEOF as a compile-time constant. `name` is a primitive keyword,
+  // an object type, or a variable (resolved via its declared type). For SIZEOF
+  // a pointer yields the pointed-to size; for PSIZEOF (pAs4) it yields 4.
+  sizeofConst(name, ctx, pAs4) {
+    if (name === 'LONG' || name === 'PTR') return 4;
+    if (name === 'INT' || name === 'WORD') return 2;
+    if (name === 'CHAR' || name === 'BYTE') return 1;
+    const obj = this.sem.objects.get(name);
+    if (obj) return obj.size;
+    const t = ctx?.types?.get(name) ?? this.globalTypes.get(name);
+    if (!t) return this.varRef(name, ctx) ? 4 : null;   // untyped var = PTR TO CHAR
+    if (t.base === 'PTR') {
+      if (pAs4) return 4;
+      const to = t.to;
+      if (!to) return 4;
+      if (to.base === 'OBJECT') return this.sem.objects.get(to.name)?.size ?? 4;
+      return typeSize(to);
+    }
+    if (t.base === 'ARRAY') return typeSize(t.of);
+    if (t.base === 'OBJECT') return this.sem.objects.get(t.name)?.size ?? 4;
+    return typeSize(t);
+  }
+
+  // Dimension sizes of a declared E-VO multi-dim array variable, or null.
+  arrayDimsOf(name, ctx) {
+    return ctx.arrayDims?.get(name) ?? this.globalArrayDims.get(name) ?? null;
+  }
+
+  // Address of a multi-dimensional array access m[i][j]... Returns {disp:0}
+  // with A0 = element/sub-array address, or null if `e` is not a multi-dim
+  // access (caller falls back to the ordinary single-index path).
+  multiDimAddress(e, ctx) {
+    // unwind the Index chain to the base variable, collecting indices
+    const idxs = [];
+    let node = e;
+    while (node.kind === 'Index' && node.idx) { idxs.unshift(node.idx); node = node.obj; }
+    if (node.kind !== 'Var') return null;
+    const dims = this.arrayDimsOf(node.name, ctx);
+    if (!dims || dims.length < 2) return null;   // only true multi-dim arrays
+    if (idxs.length > dims.length) return null;
+    const a = this.a;
+    const vt = ctx.types.get(node.name) ?? this.globalTypes.get(node.name);
+    const esize = typeSize(vt?.of);
+    // remaining stride (in elements) for a partial index = product of unindexed dims
+    let remStride = 1;
+    for (let p = idxs.length; p < dims.length; p++) remStride *= dims[p];
+    // compute the linear element index via Horner: ((i0*d1+i1)*d2+i2)...
+    this.exp(idxs[0], ctx);                 // D0 = i0
+    for (let p = 1; p < idxs.length; p++) {
+      a.movel_imm(dims[p], D1);
+      a.mulsw_dd(D1, D0);                   // D0 *= dims[p]
+      a.movel_d_push(D0);
+      this.exp(idxs[p], ctx);               // D0 = i_p
+      a.movel_pop_d(D1);
+      a.addl_dd(D1, D0);                    // D0 = i_p + partial
+    }
+    const factor = remStride * esize;
+    if (factor !== 1) { a.movel_imm(factor, D1); a.mulsw_dd(D1, D0); }
+    a.movel_d_push(D0);
+    this.loadVar(node.name, ctx, e);        // D0 = base pointer
+    a.movel_pop_d(D1);
+    a.movel_da(D0, A0);
+    a.addal_d(D1, A0);
+    return { disp: 0 };
+  }
+
   addressOf(e, ctx) {
     const a = this.a;
     if (e.kind === 'Member') {
@@ -1866,8 +2037,11 @@ export class Codegen {
       return m.offset;
     }
     if (e.kind === 'Index') {
+      // E-VO multi-dimensional array: m[i][j]... on a contiguous block.
+      const md = this.multiDimAddress(e, ctx);
+      if (md) return md.disp;
       const et = this.typeOf(e, ctx);
-      const esize = et?.base === 'CHAR' ? 1 : et?.base === 'INT' ? 2 :
+      const esize = (et?.base === 'CHAR' || et?.base === 'BYTE') ? 1 : (et?.base === 'INT' || et?.base === 'WORD') ? 2 :
         et?.base === 'OBJECT' ? (this.sem.objects.get(et.name)?.size ?? 4) : 4;
       this.exp(e.obj, ctx);
       if (!e.idx) { a.movel_da(D0, A0); return 0; }
@@ -1894,11 +2068,37 @@ export class Codegen {
     return 0;
   }
 
-  loadFrom(disp, size) {
+  // `signed`: true = sign-extend (BYTE/INT), false = zero-extend (CHAR/WORD),
+  // null/undefined = size default (byte unsigned, word signed — the EC default).
+  loadFrom(disp, size, signed) {
     const a = this.a;
-    if (size === 1) { a.moveq(0, D0); a.moveb_disp_d(disp, A0, D0); }
-    else if (size === 2) { a.movew_disp_d(disp, A0, D0); a.extl(D0); }
-    else a.movel_disp_d(disp, A0, D0);
+    if (signed === undefined || signed === null) signed = (size === 2);
+    if (size === 1) {
+      if (signed) { a.moveb_disp_d(disp, A0, D0); a.extw(D0); a.extl(D0); }
+      else { a.moveq(0, D0); a.moveb_disp_d(disp, A0, D0); }
+    } else if (size === 2) {
+      if (signed) { a.movew_disp_d(disp, A0, D0); a.extl(D0); }
+      else { a.moveq(0, D0); a.movew_disp_d(disp, A0, D0); }
+    } else a.movel_disp_d(disp, A0, D0);
+  }
+
+  // sign-extend (BYTE/INT) vs zero-extend (CHAR/WORD) on load, or null=default
+  accessSigned(e, ctx) {
+    let t;
+    if (e.kind === 'Index') {
+      const idxs = []; let n = e;
+      while (n.kind === 'Index' && n.idx) { idxs.unshift(n.idx); n = n.obj; }
+      if (n.kind === 'Var') {
+        const dims = this.arrayDimsOf(n.name, ctx);
+        if (dims && dims.length >= 2 && idxs.length >= dims.length) {
+          t = (ctx.types.get(n.name) ?? this.globalTypes.get(n.name))?.of;
+        }
+      }
+    }
+    if (!t) t = this.typeOf(e, ctx);
+    if (t?.base === 'CHAR' || t?.base === 'WORD') return false;
+    if (t?.base === 'BYTE' || t?.base === 'INT') return true;
+    return null;
   }
 
   storeTo(disp, size) {
@@ -1930,6 +2130,22 @@ export class Codegen {
     else this.a.movel_d_disp(D0, r.disp, A5);
   }
 
+  // Store the value currently in D0 into an assignment target (Var or an
+  // lvalue: Member/Index/Deref). Used by Assign and Swap.
+  assignInD0(target, ctx, node) {
+    const a = this.a;
+    if (target.kind === 'Var') {
+      this.storeVar(target.name, ctx, node);
+    } else if (['Member', 'Index', 'Deref'].includes(target.kind)) {
+      a.movel_d_push(D0);
+      const disp = this.addressOf(target, ctx);
+      a.movel_pop_d(D0);
+      const size = this.accessSize(target, ctx);
+      if (size === 0) this.err(node, 'cannot assign to embedded member');
+      else this.storeTo(disp, size);
+    } else this.err(node, `cannot assign to ${target.kind}`);
+  }
+
   // ---------- statements ----------
 
   stat(s, ctx) {
@@ -1941,19 +2157,16 @@ export class Codegen {
         }
         break;
       case 'Assign':
-        if (s.target.kind === 'Var') {
-          this.exp(s.exp, ctx);
-          this.storeVar(s.target.name, ctx, s);
-        } else if (['Member', 'Index', 'Deref'].includes(s.target.kind)) {
-          this.exp(s.exp, ctx);
-          a.movel_d_push(D0);
-          const disp = this.addressOf(s.target, ctx);
-          a.movel_pop_d(D0);
-          const size = this.accessSize(s.target, ctx);
-          if (size === 0) this.err(s, 'cannot assign to embedded member');
-          else this.storeTo(disp, size);
-        } else this.err(s, `cannot assign to ${s.target.kind}`);
+        this.exp(s.exp, ctx);
+        this.assignInD0(s.target, ctx, s);
         break;
+      case 'Swap': {   // E-VO  a :=: b  — exchange two lvalues
+        this.exp(s.a, ctx); a.movel_d_push(D0);
+        this.exp(s.b, ctx); a.movel_d_push(D0);
+        a.movel_pop_d(D0); this.assignInD0(s.a, ctx, s);   // a := (old b)
+        a.movel_pop_d(D0); this.assignInD0(s.b, ctx, s);   // b := (old a)
+        break;
+      }
       case 'ExprStat': this.exp(s.exp, ctx); break;
       case 'Return': {
         const rets = s.exps;
@@ -1972,21 +2185,20 @@ export class Codegen {
         break;
       }
       case 'If': {
+        // E-VO IFN/ELSEIFN invert the branch sense (skip body when cond TRUE).
+        const skip = (neg, target) => { a.tstl(D0); if (neg) a.bne(target); else a.beq(target); };
         const elseL = this.uniq('else'), endL = this.uniq('endif');
         this.exp(s.cond, ctx);
-        a.tstl(D0);
-        a.beq(s.elifs?.length || s.else ? elseL : endL);
+        skip(s.neg, s.elifs?.length || s.else ? elseL : endL);
         for (const st of s.then) this.stat(st, ctx);
         if (s.elifs?.length || s.else) {
           a.bra(endL);
           a.label(elseL);
-          let chain = elseL;
           for (let i = 0; i < (s.elifs?.length ?? 0); i++) {
             const ei = s.elifs[i];
             this.exp(ei.cond, ctx);
-            a.tstl(D0);
             const next = this.uniq('elif');
-            a.beq(i + 1 < s.elifs.length || s.else ? next : endL);
+            skip(ei.neg, i + 1 < s.elifs.length || s.else ? next : endL);
             for (const st of ei.body) this.stat(st, ctx);
             a.bra(endL);
             a.label(next);
@@ -1997,47 +2209,97 @@ export class Codegen {
         break;
       }
       case 'While': {
+        // E-VO generalised WHILE: each iteration tries the WHILE/ELSEWHILE[N]
+        // branches top-down; the first whose condition matches runs its body
+        // then the ALWAYS part; if none match the loop exits.
         const top = this.uniq('wh'), end = this.uniq('whend');
+        const alwaysL = s.always ? this.uniq('whalw') : top;
         ctx.loopEnds.push(end);
+        ctx.loopConts.push(alwaysL);   // CONT re-enters via ALWAYS (or top)
         a.label(top);
-        this.exp(s.cond, ctx);
-        a.tstl(D0);
-        a.beq(end);
-        for (const st of s.body) this.stat(st, ctx);
-        a.bra(top);
+        for (const b of s.branches) {
+          const next = this.uniq('whnext');
+          this.exp(b.cond, ctx);
+          a.tstl(D0);
+          if (b.neg) a.bne(next); else a.beq(next);
+          for (const st of b.body) this.stat(st, ctx);
+          a.bra(alwaysL);
+          a.label(next);
+        }
+        a.bra(end);   // no branch matched
+        if (s.always) {
+          a.label(alwaysL);
+          for (const st of s.always) this.stat(st, ctx);
+          a.bra(top);
+        }
         a.label(end);
         ctx.loopEnds.pop();
+        ctx.loopConts.pop();
         break;
       }
       case 'Repeat': {
         const top = this.uniq('rp'), end = this.uniq('rpend');
         ctx.loopEnds.push(end);
+        ctx.loopConts.push(top);
         a.label(top);
         for (const st of s.body) this.stat(st, ctx);
         this.exp(s.cond, ctx);
         a.tstl(D0);
-        a.beq(top);
+        // REPEAT..UNTIL loops while cond FALSE; UNTILN loops while cond TRUE.
+        if (s.neg) a.bne(top); else a.beq(top);
         a.label(end);
         ctx.loopEnds.pop();
+        ctx.loopConts.pop();
+        break;
+      }
+      case 'Try': {
+        // E-VO block-scoped exceptions. Push a {prev,sp,fp,resume-pc} handler
+        // frame (same shape __raise unwinds to) on the stack for the TRY body;
+        // a Throw/Raise inside it jumps to the CATCH block.
+        const catchL = this.uniq('catch'), end = this.uniq('endtry');
+        a.lea_disp(-16, A7, A7);              // reserve the frame at A7
+        a.movel_aa(A7, A0);                   // A0 = &frame
+        a.movel_disp_d(28, A4, D0);
+        a.movel_d_ind(D0, A0);                // prev@0 = old chain head
+        a.movel_a_disp(A7, 4, A0);            // sp@4  = A7 (&frame)
+        a.movel_a_disp(A5, 8, A0);            // fp@8
+        a.lea_pc(catchL, A1);
+        a.movel_a_disp(A1, 12, A0);           // resume-pc@12
+        a.movel_a_disp(A0, 28, A4);           // chain head = &frame
+        for (const st of s.body) this.stat(st, ctx);
+        a.movel_ind_d(A7, D0);                // unlink: head = prev (A7=&frame)
+        a.movel_d_disp(D0, 28, A4);
+        a.lea_disp(16, A7, A7);               // pop frame
+        a.bra(end);
+        a.label(catchL);                      // entered via __raise: A7=&frame, A5 restored
+        a.movel_ind_d(A7, D0);
+        a.movel_d_disp(D0, 28, A4);           // unlink
+        a.lea_disp(16, A7, A7);               // pop frame
+        for (const st of s.catch) this.stat(st, ctx);
+        a.label(end);
         break;
       }
       case 'Loop': {
         const top = this.uniq('lp'), end = this.uniq('lpend');
         ctx.loopEnds.push(end);
+        ctx.loopConts.push(top);
         a.label(top);
         for (const st of s.body) this.stat(st, ctx);
         a.bra(top);
         a.label(end);
         ctx.loopEnds.pop();
+        ctx.loopConts.pop();
         break;
       }
       case 'For': {
         const top = this.uniq('for'), end = this.uniq('forend');
         const step = s.step ? this.sem.foldConst(s.step) : 1;
         if (step === null) { this.err(s, 'tracer: STEP must be constant'); break; }
+        const cont = this.uniq('forcont');
         this.exp(s.from, ctx);
         this.storeVar(s.var, ctx, s);
         ctx.loopEnds.push(end);
+        ctx.loopConts.push(cont);   // CONT skips to the increment+retest
         a.label(top);
         this.exp(s.to, ctx);
         a.movel_dd(D0, D1);
@@ -2045,6 +2307,7 @@ export class Codegen {
         a.cmpl_dd(D1, D0);                       // var - limit
         a.bcc(step > 0 ? COND.GT : COND.LT, end);
         for (const st of s.body) this.stat(st, ctx);
+        a.label(cont);
         const r = this.varRef(s.var, ctx);
         const an = r.kind === 'global' ? A4 : A5;
         if (step >= 1 && step <= 8) a.addql_disp(step, r.disp, an);
@@ -2058,6 +2321,7 @@ export class Codegen {
         a.bra(top);
         a.label(end);
         ctx.loopEnds.pop();
+        ctx.loopConts.pop();
         break;
       }
       case 'Exit': {
@@ -2066,8 +2330,19 @@ export class Codegen {
         if (s.cond) {
           this.exp(s.cond, ctx);
           a.tstl(D0);
-          a.bne(end);
+          // EXIT cond exits when TRUE; EXITN exits when FALSE.
+          if (s.neg) a.beq(end); else a.bne(end);
         } else a.bra(end);
+        break;
+      }
+      case 'Cont': {   // E-VO loop continue (CONTN = inverted condition)
+        const cont = ctx.loopConts[ctx.loopConts.length - 1];
+        if (!cont) { this.err(s, 'CONT outside loop'); break; }
+        if (s.cond) {
+          this.exp(s.cond, ctx);
+          a.tstl(D0);
+          if (s.neg) a.beq(cont); else a.bne(cont);
+        } else a.bra(cont);
         break;
       }
       case 'Inc': case 'Dec':
@@ -2294,6 +2569,30 @@ export class Codegen {
   // NEW p / NEW p[n] — allocate zeroed memory sized from p's pointer type
   genNew(lval, ctx, node) {
     const a = this.a;
+    // E-VO: NEW <objtype> or NEW <objtype>.ctor(args) — objtype names an OBJECT
+    // type (not a variable). Allocate sizeof(objtype); the expression value is
+    // the fresh pointer. The constructor form also runs the OF method on it.
+    const typeName = lval.kind === 'Var' ? lval.name
+      : (lval.kind === 'Call' && lval.callee.kind === 'Member' && lval.callee.obj.kind === 'Var')
+        ? lval.callee.obj.name : null;
+    if (typeName && this.sem.objects.has(typeName) && !this.varRef(typeName, ctx)) {
+      const sz = this.sem.objects.get(typeName).size;
+      if (sz >= -128 && sz <= 127) a.moveq(sz, D0); else a.movel_imm(sz, D0);
+      a.bsr('__new');                         // D0 = fresh pointer
+      if (lval.kind === 'Var') return;        // bare NEW objtype
+      const method = lval.callee.name;
+      let owner = typeName;
+      while (owner && !this.sem.procs.has(`${owner}.${method}`)) owner = this.sem.objects.get(owner)?.of ?? null;
+      if (!owner) { this.err(node, `no constructor ${method} on ${typeName}`); return; }
+      a.movel_d_push(D0);                     // keep the pointer across the call
+      a.movel_d_push(D0);                     // self (hidden first arg)
+      for (const arg of lval.args) { this.exp(arg, ctx); a.movel_d_push(D0); }
+      a.bsr(`proc_${owner}$${method}`);
+      const pop = 4 * (lval.args.length + 1);
+      if (pop <= 8) a.addql_a(pop, A7); else a.addal_imm(pop, A7);
+      a.movel_pop_d(D0);                      // expression value = the pointer
+      return;
+    }
     // constructor form: NEW a.create(args) — allocate, then call the method
     if (lval.kind === 'Call' && lval.callee.kind === 'Member') {
       const objExp = lval.callee.obj;
@@ -2396,6 +2695,15 @@ export class Codegen {
       }
       case 'Var': {
         if (e.refType === 'upper') {
+          // E-VO: a CPU register name used as an expression value (its current
+          // contents, e.g. a result left in D0 by an inline-asm block).
+          const reg = this.evo && /^[DA][0-7]$/.test(e.name) ? e.name : null;
+          if (reg) {
+            const n = +reg[1];
+            if (reg[0] === 'D') { if (n !== D0) a.movel_dd(n, D0); }
+            else a.movel_ad(n, D0);
+            break;
+          }
           const c = this.sem.consts.get(e.name);
           if (c === undefined) { this.err(e, `tracer: unknown constant ${e.name}`); break; }
           if (c >= -128 && c <= 127) a.moveq(c, D0);
@@ -2416,13 +2724,60 @@ export class Codegen {
           break;
         }
         this.exp(e.exp, ctx); a.negl(D0); break;
+      case 'Not':   // E-VO unary bitwise complement (NOT x / ~x)
+        this.exp(e.exp, ctx); a.notl(D0); break;
       case 'Bin': case 'FloatConv': case 'FloatPrefix':
         this.fchain(e, ctx, { f: false });
         break;
+      case 'QuickCompare': {   // E-VO  exp == [v, lo TO hi, ...]  -> -1/0
+        const tru = this.uniq('qctrue'), end = this.uniq('qcend');
+        this.exp(e.exp, ctx);
+        a.movel_dd(D0, D2);                 // subject kept in D2
+        for (const it of e.items) {
+          if (it.val !== undefined) {
+            this.exp(it.val, ctx);
+            a.cmpl_dd(D0, D2);              // D2 - val
+            a.beq(tru);
+          } else {                          // lo TO hi (inclusive)
+            const skip = this.uniq('qcskip');
+            this.exp(it.from, ctx);
+            a.cmpl_dd(D0, D2);              // D2 - lo
+            a.bcc(COND.LT, skip);           // D2 < lo -> not in range
+            this.exp(it.to, ctx);
+            a.cmpl_dd(D0, D2);              // D2 - hi
+            a.bcc(COND.LE, tru);            // D2 <= hi -> match
+            a.label(skip);
+          }
+        }
+        a.moveq(0, D0); a.bra(end);
+        a.label(tru); a.moveq(-1, D0);
+        a.label(end);
+        break;
+      }
+      case 'Logical': {   // E-VO ANDALSO / ORELSE — short-circuit, result -1/0
+        const end = this.uniq('scend');
+        if (e.op === 'ANDALSO') {
+          const f = this.uniq('scfalse');
+          this.exp(e.l, ctx); a.tstl(D0); a.beq(f);
+          this.exp(e.r, ctx); a.tstl(D0); a.beq(f);
+          a.moveq(-1, D0); a.bra(end);
+          a.label(f); a.moveq(0, D0);
+        } else {   // ORELSE
+          const tr = this.uniq('sctrue');
+          this.exp(e.l, ctx); a.tstl(D0); a.bne(tr);
+          this.exp(e.r, ctx); a.tstl(D0); a.bne(tr);
+          a.moveq(0, D0); a.bra(end);
+          a.label(tr); a.moveq(-1, D0);
+        }
+        a.label(end);
+        break;
+      }
       case 'AssignExp':
         this.exp(e.exp, ctx);
-        if (e.target.kind === 'Var') this.storeVar(e.target.name, ctx, e);
-        else this.err(e, 'tracer: assign to plain variables only');
+        this.assignInD0(e.target, ctx, e);   // Var or any lvalue (Member/Index/Deref)
+        break;
+      case 'Cast':   // n::type — value/pointer passes through; type used by typeOf
+        this.exp(e.obj, ctx);
         break;
       case 'Ternary': {
         const elseL = this.uniq('telse'), endL = this.uniq('tend');
@@ -2446,7 +2801,7 @@ export class Codegen {
         if (size === 0) {                      // embedded member: its address
           a.lea_disp(disp, A0, A0);
           a.movel_ad(A0, D0);
-        } else this.loadFrom(disp, size);
+        } else this.loadFrom(disp, size, this.accessSigned(e, ctx));
         break;
       }
       case 'PostInc': case 'PostDec': {
@@ -2503,14 +2858,33 @@ export class Codegen {
           // absolute runtime address with no relocation.
           a.lea_pc(`proc_${e.name}`, A0);
           a.movel_ad(A0, D0);
-        } else { this.err(e, `unknown variable {${e.name}}`); break; }
+        } else {
+          // {label} — address of a code/data label (lp:). Emitted as user_<lp>;
+          // the assembler/linker resolves it (errors if the label is undefined).
+          a.lea_pc(`user_${e.name}`, A0);
+          a.movel_ad(A0, D0);
+        }
         break;
       }
-      case 'Sizeof': {
-        const v = this.sem.foldConst(e);
-        if (v === null) { this.err(e, `unknown SIZEOF ${e.name}`); break; }
-        if (v >= -128 && v <= 127) a.moveq(v, D0);
-        else a.movel_imm(v, D0);
+      case 'Sizeof': case 'Psizeof': {
+        const v = this.sizeofConst(e.name, ctx, e.kind === 'Psizeof');
+        if (v === null) { this.err(e, `unknown ${e.kind === 'Psizeof' ? 'PSIZEOF' : 'SIZEOF'} ${e.name}`); break; }
+        if (v >= -128 && v <= 127) a.moveq(v, D0); else a.movel_imm(v, D0);
+        break;
+      }
+      case 'Offsetof': {   // E-VO OFFSETOF objtype.member
+        const obj = this.sem.objects.get(e.objType);
+        const m = obj?.members.get(e.member);
+        if (!m) { this.err(e, `unknown OFFSETOF ${e.objType}.${e.member}`); break; }
+        if (m.offset >= -128 && m.offset <= 127) a.moveq(m.offset, D0); else a.movel_imm(m.offset, D0);
+        break;
+      }
+      case 'Arraysize': {   // E-VO ARRAYSIZE [dim,] arrayvar
+        const dim = this.sem.foldConst(e.dim) ?? 1;
+        const dims = this.arrayDimsOf(e.name, ctx);
+        const v = dims ? (dims[dim - 1] ?? 0) : 0;
+        if (!dims) { this.err(e, `ARRAYSIZE on non-array ${e.name}`); break; }
+        if (v >= -128 && v <= 127) a.moveq(v, D0); else a.movel_imm(v, D0);
         break;
       }
       case 'Call': this.call(e, ctx); break;
@@ -2873,21 +3247,24 @@ export class Codegen {
         else a.addal_imm(pop, A7);
         return;
       }
-      if (callee.name === 'WriteF' || callee.name === 'StringF') {
+      // AstringF (E-VO) shares StringF's shape but formats into a plain char
+      // array (no estring length header).
+      if (callee.name === 'WriteF' || callee.name === 'StringF' ||
+        (this.evo && callee.name === 'AstringF')) {
         // ALL arguments evaluate left-to-right (E order; oracle-verified by
         // side-effecting args). Pushed L→R, so the runtimes walk descending.
-        const isStringF = callee.name === 'StringF';
+        const isStringF = callee.name === 'StringF' || callee.name === 'AstringF';
         const fixed = isStringF ? 2 : 1;     // StringF(est, fmt, ...) WriteF(fmt, ...)
         const n = e.args.length - fixed;
         for (const arg of e.args) {
           this.exp(arg, ctx);
           a.movel_d_push(D0);
         }
-        if (isStringF) a.movel_disp_d(4 * (n + 1), A7, D0);   // est
+        if (isStringF) a.movel_disp_d(4 * (n + 1), A7, D0);   // est / dest
         a.movel_disp_a(4 * n, A7, A0);                        // fmt
         if (n > 0) a.lea_disp(4 * (n - 1), A7, A1);           // &arg1
         else a.movel_aa(A7, A1);
-        a.bsr(isStringF ? '__stringf' : '__writef');
+        a.bsr(callee.name === 'AstringF' ? '__astringf' : isStringF ? '__stringf' : '__writef');
         const pop = 4 * e.args.length;
         if (pop <= 8) a.addql_a(pop, A7);
         else a.addal_imm(pop, A7);
@@ -2906,11 +3283,100 @@ export class Codegen {
         else { a.divsw_dd(D1, D0); a.swap(D0); a.extl(D0); }
         return;
       }
+      // E-VO two-operand integer builtins: arg0 OP arg1 (logical/rotate/bitwise)
+      if (['Lsl', 'Lsr', 'Rol', 'Ror', 'And', 'Or'].includes(callee.name)) {
+        this.exp(e.args[0], ctx);
+        a.movel_d_push(D0);
+        this.exp(e.args[1], ctx);
+        a.movel_dd(D0, D1);
+        a.movel_pop_d(D0);
+        if (callee.name === 'Lsl') a.lsll_d(D1, D0);
+        else if (callee.name === 'Lsr') a.lsrl_d(D1, D0);
+        else if (callee.name === 'Rol') a.roll_d(D1, D0);
+        else if (callee.name === 'Ror') a.rorl_d(D1, D0);
+        else if (callee.name === 'And') a.andl_dd(D1, D0);
+        else a.orl_dd(D1, D0);
+        return;
+      }
+      // E-VO signed/unsigned compare -> -1 / 0 / 1
+      if (callee.name === 'Compare' || callee.name === 'Ucompare') {
+        const hi = callee.name === 'Ucompare';
+        this.exp(e.args[0], ctx);
+        a.movel_d_push(D0);
+        this.exp(e.args[1], ctx);
+        a.movel_dd(D0, D1);
+        a.movel_pop_d(D0);
+        const eq = this.uniq('cmpeq'), gt = this.uniq('cmpgt'), end = this.uniq('cmpend');
+        a.cmpl_dd(D1, D0);                 // D0 - D1
+        a.bcc(COND.EQ, eq);
+        a.bcc(hi ? COND.HI : COND.GT, gt);
+        a.moveq(-1, D0); a.bra(end);
+        a.label(gt); a.moveq(1, D0); a.bra(end);
+        a.label(eq); a.moveq(0, D0);
+        a.label(end);
+        return;
+      }
+      if (callee.name === 'Div') {        // 32-bit signed divide (vs / which is 16-bit)
+        this.exp(e.args[0], ctx);
+        a.movel_d_push(D0);
+        this.exp(e.args[1], ctx);
+        a.movel_dd(D0, D1);
+        a.movel_pop_d(D0);
+        a.bsr('__sdivmod');               // D0 = quotient
+        return;
+      }
+      if (callee.name === 'Sign') {       // -1 / 0 / 1 of a signed value
+        this.exp(e.args[0], ctx);
+        const pos = this.uniq('sgnp'), end = this.uniq('sgnend');
+        a.tstl(D0);
+        a.bcc(COND.EQ, end);
+        a.bcc(COND.GT, pos);
+        a.moveq(-1, D0); a.bra(end);
+        a.label(pos); a.moveq(1, D0);
+        a.label(end);
+        return;
+      }
+      if (callee.name === 'UpperChar' || callee.name === 'LowerChar') {
+        // map a..z<->A..Z within range, leave others unchanged
+        const lower = callee.name === 'LowerChar';
+        const lo = lower ? 65 : 97, hi = lower ? 90 : 122;   // source range
+        this.exp(e.args[0], ctx);
+        const end = this.uniq('chend');
+        a.movel_imm(lo, D1); a.cmpl_dd(D1, D0); a.bcc(COND.LT, end);
+        a.movel_imm(hi, D1); a.cmpl_dd(D1, D0); a.bcc(COND.GT, end);
+        a.movel_imm(32, D1);
+        if (lower) a.addl_dd(D1, D0); else a.subl_dd(D1, D0);
+        a.label(end);
+        return;
+      }
+      // E-VO memory reads: Byte = signed 8-bit, Word = unsigned 16-bit
+      if (callee.name === 'Byte' || callee.name === 'Word') {
+        this.exp(e.args[0], ctx);
+        a.movel_da(D0, A0);
+        if (callee.name === 'Byte') { a.moveb_ind_d(A0, D0); a.extw(D0); a.extl(D0); }
+        else { a.moveq(0, D0); a.movew_ind_d(A0, D0); }
+        return;
+      }
+      // E-VO memory writes: Put<sz>(ptr, value) stores value, returns it
+      const PUT = { PutByte: 1, PutChar: 1, PutInt: 2, PutWord: 2, PutLong: 4 };
+      if (PUT[callee.name] !== undefined) {
+        const sz = PUT[callee.name];
+        this.exp(e.args[0], ctx);          // ptr
+        a.movel_d_push(D0);
+        this.exp(e.args[1], ctx);          // value
+        a.movel_pop_a(A0);
+        if (sz === 1) a.moveb_d_ind(D0, A0);
+        else if (sz === 2) a.movew_d_ind(D0, A0);
+        else a.movel_d_ind(D0, A0);
+        return;
+      }
       {
         // float builtins: singbas one-arg, singtrans one-arg, Fpow two-arg
         const SB = { Fabs: -54, Ffloor: -90, Fceil: -96 };
         const TR = { Fatan: -30, Fsin: -36, Fcos: -42, Ftan: -48, Fexp: -78,
-          Flog: -84, Fsqrt: -96, Fasin: -114, Facos: -120, Flog10: -126 };
+          Flog: -84, Fsqrt: -96, Fasin: -114, Facos: -120, Flog10: -126,
+          // E-VO additions (mathieeesingtrans LVOs)
+          Fsinh: -60, Fcosh: -66, Ftanh: -72, Ftieee: -102, Ffieee: -108 };
         if (SB[callee.name] !== undefined || TR[callee.name] !== undefined) {
           this.exp(e.args[0], ctx);
           const sb = SB[callee.name] !== undefined;
@@ -3001,7 +3467,8 @@ export class Codegen {
         a.movel_d_ind(D1, A0);         // head
         return;
       }
-      if (['MapList', 'ForAll', 'Exists', 'SelectList'].includes(callee.name)) {
+      if (['MapList', 'ForAll', 'Exists', 'SelectList'].includes(callee.name) ||
+        (this.evo && callee.name === 'SelectFirst')) {
         const four = callee.name === 'MapList' || callee.name === 'SelectList';
         for (const arg of e.args) {
           this.exp(arg, ctx);
@@ -3011,7 +3478,8 @@ export class Codegen {
         else { a.movel_pop_d(D3); a.moveq(0, D2); a.movel_pop_d(D1); a.movel_pop_d(D0); }
         a.bsr(callee.name === 'MapList' ? '__maplist'
           : callee.name === 'SelectList' ? '__selectlist'
-            : callee.name === 'ForAll' ? '__forall' : '__exists');
+            : callee.name === 'ForAll' ? '__forall'
+              : callee.name === 'SelectFirst' ? '__selectfirst' : '__exists');
         return;
       }
       if (callee.name === 'Min' || callee.name === 'Max') {
@@ -3214,14 +3682,27 @@ export class Codegen {
         a.extl(D0);
         return;
       }
+      // E-VO: SetStr(estr) with no length auto-computes it from the NUL.
+      if (this.evo && callee.name === 'SetStr' && e.args.length === 1) {
+        this.exp(e.args[0], ctx);
+        a.movel_d_push(D0);
+        a.bsr('__strlen');           // d0 = strlen(estr)
+        a.movel_dd(D0, D1);
+        a.movel_pop_d(D0);
+        a.bsr('__setstr');
+        return;
+      }
       const info = Codegen.BUILTINS[callee.name];
       if (info) { this.callFixed(e, ctx, info); return; }
       const lib = Codegen.LIBCALLS[callee.name];
       if (lib) { this.emitLibCall(e, ctx, lib); return; }
       const mf = this.sem.libfuncs?.get(callee.name);
       if (mf) { this.emitModLibCall(e, ctx, mf); return; }
-      this.err(e, `builtin ${callee.name} not yet supported`);
-      return;
+      // E-VO stdlib builtins (Mem/…) live in src/evo/codegen.js
+      if (this.evo && evoBuiltin(this, callee.name, e, ctx)) return;
+      // an ecall-named user/stdlib proc (e.g. injected EVO StrAddChar): fall
+      // through to the proc dispatch below instead of erroring.
+      if (!this.sem.procs.has(callee.name)) { this.err(e, `builtin ${callee.name} not yet supported`); return; }
     }
     if (callee.kind === 'Var' && this.sem.procs.has(callee.name)) {
       const procInfo = this.sem.procs.get(callee.name);
@@ -3241,6 +3722,16 @@ export class Codegen {
         for (let i = e.args.length; i < declared; i++) {
           const dv = procInfo.defaults[i - nRequired] ?? 0;
           a.movel_imm(dv, D0);
+          a.movel_d_push(D0);
+          pushed++;
+        }
+      }
+      // Source procs read all declared params from fixed frame offsets too, so
+      // pad omitted trailing args with their default expressions (DEF a=def).
+      else if (!isBin && Array.isArray(procInfo.args) && e.args.length < procInfo.args.length) {
+        for (let i = e.args.length; i < procInfo.args.length; i++) {
+          const init = procInfo.args[i]?.init;
+          if (init != null) this.exp(init, ctx); else a.moveq(0, D0);
           a.movel_d_push(D0);
           pushed++;
         }

@@ -1,11 +1,12 @@
 import { test } from './harness.js';
 import { parse } from '../src/parser.js';
 
-function ok(src) {
-  const { program, errors } = parse(src);
+function ok(src, opts) {
+  const { program, errors } = parse(src, '<input>', opts);
   if (errors.length) throw new Error('parse errors: ' + JSON.stringify(errors, null, 1));
   return program;
 }
+const EVO = { evo: true };
 function bad(src) {
   const { errors } = parse(src);
   if (!errors.length) throw new Error('expected parse errors, got none');
@@ -112,6 +113,13 @@ test('typed lists, nested lists, lisp cells', a => {
   const cell = p.procs[0].body[2].exp;
   a.equal(cell.kind, 'Cell');
   a.equal(cell.tail.kind, 'Cell');
+});
+
+test('E-VO unary NOT and ~ (bitwise complement)', a => {
+  const p = ok('PROC main()\n  DEF x\n  x:=NOT $00\n  x:=~x\n  IF NOT x THEN x:=1\nENDPROC', EVO);
+  const b = p.procs[0].body;   // b[0] is the DEF
+  a.equal(b[1].exp.kind, 'Not');   // NOT $00
+  a.equal(b[2].exp.kind, 'Not');   // ~x
 });
 
 test('NEW expression and statement forms', a => {
