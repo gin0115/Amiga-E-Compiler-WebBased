@@ -699,6 +699,13 @@ class Parser {
       const rhs = this.parseChain();
       exp = { kind: 'But', first: exp, value: rhs };
     }
+    // E-VO C-style ternary: cond ? then : else
+    if (this.eat('?')) {
+      const then = this.parseChain();
+      this.expect(':');
+      const els = this.parseChain();
+      exp = { kind: 'Ternary', cond: exp, then, else: els };
+    }
     return exp;
   }
 
@@ -722,6 +729,9 @@ class Parser {
         op = t.type === '<' ? 'SHL' : 'SHR';
         shiftPair = true;
       }
+      else if (t.type === '&') op = 'AND';   // E-VO: & is bitwise AND
+      else if (t.type === '|' && t2.type === '|' && this.cellDepth === 0 &&
+        t2.line === t.line && t2.col === t.col + 1) { op = 'OR'; shiftPair = true; }   // E-VO: || is bitwise OR
       else if (BINOPS.has(t.type)) op = t.type;
       else if (t.type === 'kw' && KWBINOPS.has(t.value)) op = t.value;
       else if (t.type === 'upper' && ['SHL', 'SHR', 'XOR'].includes(t.value)) op = t.value;
