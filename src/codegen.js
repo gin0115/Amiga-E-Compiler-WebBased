@@ -3128,6 +3128,84 @@ export class Codegen {
         else { a.divsw_dd(D1, D0); a.swap(D0); a.extl(D0); }
         return;
       }
+      // E-VO two-operand integer builtins: arg0 OP arg1 (logical/rotate/bitwise)
+      if (['Lsl', 'Lsr', 'Rol', 'Ror', 'And', 'Or'].includes(callee.name)) {
+        this.exp(e.args[0], ctx);
+        a.movel_d_push(D0);
+        this.exp(e.args[1], ctx);
+        a.movel_dd(D0, D1);
+        a.movel_pop_d(D0);
+        if (callee.name === 'Lsl') a.lsll_d(D1, D0);
+        else if (callee.name === 'Lsr') a.lsrl_d(D1, D0);
+        else if (callee.name === 'Rol') a.roll_d(D1, D0);
+        else if (callee.name === 'Ror') a.rorl_d(D1, D0);
+        else if (callee.name === 'And') a.andl_dd(D1, D0);
+        else a.orl_dd(D1, D0);
+        return;
+      }
+      // E-VO signed/unsigned compare -> -1 / 0 / 1
+      if (callee.name === 'Compare' || callee.name === 'Ucompare') {
+        const hi = callee.name === 'Ucompare';
+        this.exp(e.args[0], ctx);
+        a.movel_d_push(D0);
+        this.exp(e.args[1], ctx);
+        a.movel_dd(D0, D1);
+        a.movel_pop_d(D0);
+        const eq = this.uniq('cmpeq'), gt = this.uniq('cmpgt'), end = this.uniq('cmpend');
+        a.cmpl_dd(D1, D0);                 // D0 - D1
+        a.bcc(COND.EQ, eq);
+        a.bcc(hi ? COND.HI : COND.GT, gt);
+        a.moveq(-1, D0); a.bra(end);
+        a.label(gt); a.moveq(1, D0); a.bra(end);
+        a.label(eq); a.moveq(0, D0);
+        a.label(end);
+        return;
+      }
+      if (callee.name === 'Sign') {       // -1 / 0 / 1 of a signed value
+        this.exp(e.args[0], ctx);
+        const pos = this.uniq('sgnp'), end = this.uniq('sgnend');
+        a.tstl(D0);
+        a.bcc(COND.EQ, end);
+        a.bcc(COND.GT, pos);
+        a.moveq(-1, D0); a.bra(end);
+        a.label(pos); a.moveq(1, D0);
+        a.label(end);
+        return;
+      }
+      if (callee.name === 'UpperChar' || callee.name === 'LowerChar') {
+        // map a..z<->A..Z within range, leave others unchanged
+        const lower = callee.name === 'LowerChar';
+        const lo = lower ? 65 : 97, hi = lower ? 90 : 122;   // source range
+        this.exp(e.args[0], ctx);
+        const end = this.uniq('chend');
+        a.movel_imm(lo, D1); a.cmpl_dd(D1, D0); a.bcc(COND.LT, end);
+        a.movel_imm(hi, D1); a.cmpl_dd(D1, D0); a.bcc(COND.GT, end);
+        a.movel_imm(32, D1);
+        if (lower) a.addl_dd(D1, D0); else a.subl_dd(D1, D0);
+        a.label(end);
+        return;
+      }
+      // E-VO memory reads: Byte = signed 8-bit, Word = unsigned 16-bit
+      if (callee.name === 'Byte' || callee.name === 'Word') {
+        this.exp(e.args[0], ctx);
+        a.movel_da(D0, A0);
+        if (callee.name === 'Byte') { a.moveb_ind_d(A0, D0); a.extw(D0); a.extl(D0); }
+        else { a.moveq(0, D0); a.movew_ind_d(A0, D0); }
+        return;
+      }
+      // E-VO memory writes: Put<sz>(ptr, value) stores value, returns it
+      const PUT = { PutByte: 1, PutChar: 1, PutInt: 2, PutWord: 2, PutLong: 4 };
+      if (PUT[callee.name] !== undefined) {
+        const sz = PUT[callee.name];
+        this.exp(e.args[0], ctx);          // ptr
+        a.movel_d_push(D0);
+        this.exp(e.args[1], ctx);          // value
+        a.movel_pop_a(A0);
+        if (sz === 1) a.moveb_d_ind(D0, A0);
+        else if (sz === 2) a.movew_d_ind(D0, A0);
+        else a.movel_d_ind(D0, A0);
+        return;
+      }
       {
         // float builtins: singbas one-arg, singtrans one-arg, Fpow two-arg
         const SB = { Fabs: -54, Ffloor: -90, Fceil: -96 };

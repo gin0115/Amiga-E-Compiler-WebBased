@@ -114,6 +114,10 @@ export class Asm {
   swap(dn) { this.w16(0x4840 | dn); }
   asll_d(dq, dn) { this.w16(0xe1a0 | dq << 9 | dn); }   // asl.l Dq,Dn
   asrl_d(dq, dn) { this.w16(0xe0a0 | dq << 9 | dn); }   // asr.l Dq,Dn
+  lsll_d(dq, dn) { this.w16(0xe1a8 | dq << 9 | dn); }   // lsl.l Dq,Dn
+  lsrl_d(dq, dn) { this.w16(0xe0a8 | dq << 9 | dn); }   // lsr.l Dq,Dn
+  roll_d(dq, dn) { this.w16(0xe1b8 | dq << 9 | dn); }   // rol.l Dq,Dn
+  rorl_d(dq, dn) { this.w16(0xe0b8 | dq << 9 | dn); }   // ror.l Dq,Dn
   eorl_dd(src, dst) { this.w16(0xb180 | src << 9 | dst); } // eor.l Ds,Dd
 
   // ---- immediate byte/word ops and extra moves for the runtime ----
