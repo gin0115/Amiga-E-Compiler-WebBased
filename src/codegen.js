@@ -908,27 +908,32 @@ export class Codegen {
     a.label('__new_done');
     a.rts();
 
-    // __dispose: d0=data ptr (NIL ok) → d0=NIL
+    // __dispose: d0=data ptr (NIL ok) → d0=NIL. The chain (head@8(A4)) holds
+    // __new nodes [next.l, size.l, data...]. The data pointer is node+8 for a
+    // NEW object, but node+16 for a complex estring/list (extra 8-byte estring
+    // header). Match either offset so DisposeLink frees the RIGHT node with the
+    // RIGHT size — a wrong match used to FreeMem garbage and corrupt the heap.
     a.label('__dispose');
+    a.movel_d_push(D2);                // preserve callee-saved D2
     a.tstl(D0);
     a.beq('__di_done');
-    a.subql(8, D0);
-    a.movel_da(D0, A1);                // base
-    a.lea_disp(8, A4, A0);             // &head
+    a.lea_disp(8, A4, A0);             // A0 = &head slot
     a.label('__di_loop');
-    a.movel_ind_d(A0, D1);
-    a.beq('__di_done');                // not in chain: ignore
-    a.cmpl_dd(D0, D1);
-    a.beq('__di_unlink');
-    a.movel_da(D1, A0);                // candidate's next-slot is its first long
+    a.movel_ind_d(A0, D1);             // D1 = node
+    a.beq('__di_done');                // end of chain: not found, ignore
+    a.movel_dd(D1, D2); a.addql(8, D2); a.cmpl_dd(D0, D2); a.beq('__di_unlink');   // node+8 == P?
+    a.addql(8, D2); a.cmpl_dd(D0, D2); a.beq('__di_unlink');                        // node+16 == P?
+    a.movel_da(D1, A0);                // advance: A0 = node (its first long = next)
     a.bra('__di_loop');
     a.label('__di_unlink');
-    a.movel_ind_d(A1, D1);             // base->next
-    a.movel_d_ind(D1, A0);             // prev->next = base->next
+    a.movel_da(D1, A1);                // A1 = node (for FreeMem)
+    a.movel_ind_d(A1, D2);             // D2 = node->next
+    a.movel_d_ind(D2, A0);             // prev->next = node->next
     a.movel_disp_d(4, A1, D0);         // total size
     a.movel_absw_a(4, A6);
     a.jsr_disp(-210, A6);              // FreeMem(a1, d0)
     a.label('__di_done');
+    a.movel_pop_d(D2);                 // restore D2
     a.moveq(0, D0);
     a.rts();
 
