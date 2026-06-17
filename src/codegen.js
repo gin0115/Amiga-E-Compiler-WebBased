@@ -2041,7 +2041,7 @@ export class Codegen {
       const md = this.multiDimAddress(e, ctx);
       if (md) return md.disp;
       const et = this.typeOf(e, ctx);
-      const esize = et?.base === 'CHAR' ? 1 : et?.base === 'INT' ? 2 :
+      const esize = (et?.base === 'CHAR' || et?.base === 'BYTE') ? 1 : (et?.base === 'INT' || et?.base === 'WORD') ? 2 :
         et?.base === 'OBJECT' ? (this.sem.objects.get(et.name)?.size ?? 4) : 4;
       this.exp(e.obj, ctx);
       if (!e.idx) { a.movel_da(D0, A0); return 0; }
