@@ -4,6 +4,7 @@
 // PRIVATE/PUBLIC/EXPORT). Expressions have NO precedence: strict left-to-right
 // fold (oracle-verified: 1+2*3 = 9).
 import { lex } from './lexer.js';
+import { EVO_STDLIB_SRC } from './evo/stdlib.js';
 
 const BINOPS = new Set(['+', '-', '*', '/', '=', '<>', '<', '>', '<=', '>=', '<=>', '!']);
 const KWBINOPS = new Set(['AND', 'OR']);
@@ -1105,5 +1106,34 @@ export function parse(src, filename = '<input>', opts = {}) {
   } catch (e) {
     if (!(e instanceof TooManyErrors)) throw e;
   }
+  // E-VO: inject the referenced stdlib procs (StrAddChar, List*, …) written in
+  // E. Skipped while parsing the stdlib itself (_stdlib) to avoid recursion.
+  if (opts.evo && !opts._stdlib && program) injectEvoStdlib(program);
   return { program, errors: [...lexErrors, ...p.errors] };
+}
+
+// Collect the names of all called functions anywhere in an AST subtree.
+function collectCallNames(node, out) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) { for (const x of node) collectCallNames(x, out); return; }
+  if (node.kind === 'Call' && node.callee && typeof node.callee.name === 'string') out.add(node.callee.name);
+  for (const k in node) { if (k !== 'kind') collectCallNames(node[k], out); }
+}
+
+// Pull in only the EVO stdlib procs the program actually uses (transitively).
+function injectEvoStdlib(program) {
+  if (!program.procs) return;
+  const { program: lib } = parse(EVO_STDLIB_SRC, '<evo-stdlib>', { evo: true, _stdlib: true });
+  if (!lib || !lib.procs) return;
+  const byName = new Map(lib.procs.map(pr => [pr.name, pr]));
+  const used = new Set();
+  collectCallNames(program.procs, used);
+  const needed = new Set(), queue = [];
+  for (const n of used) if (byName.has(n) && !needed.has(n)) { needed.add(n); queue.push(n); }
+  while (queue.length) {
+    const inner = new Set();
+    collectCallNames(byName.get(queue.pop()), inner);
+    for (const n of inner) if (byName.has(n) && !needed.has(n)) { needed.add(n); queue.push(n); }
+  }
+  for (const n of needed) program.procs.push(byName.get(n));
 }

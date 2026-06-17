@@ -3533,10 +3533,11 @@ export class Codegen {
       if (lib) { this.emitLibCall(e, ctx, lib); return; }
       const mf = this.sem.libfuncs?.get(callee.name);
       if (mf) { this.emitModLibCall(e, ctx, mf); return; }
-      // E-VO stdlib builtins (List/String/Astr/Mem/…) live in src/evo/codegen.js
+      // E-VO stdlib builtins (Mem/…) live in src/evo/codegen.js
       if (this.evo && evoBuiltin(this, callee.name, e, ctx)) return;
-      this.err(e, `builtin ${callee.name} not yet supported`);
-      return;
+      // an ecall-named user/stdlib proc (e.g. injected EVO StrAddChar): fall
+      // through to the proc dispatch below instead of erroring.
+      if (!this.sem.procs.has(callee.name)) { this.err(e, `builtin ${callee.name} not yet supported`); return; }
     }
     if (callee.kind === 'Var' && this.sem.procs.has(callee.name)) {
       const procInfo = this.sem.procs.get(callee.name);
@@ -3556,6 +3557,16 @@ export class Codegen {
         for (let i = e.args.length; i < declared; i++) {
           const dv = procInfo.defaults[i - nRequired] ?? 0;
           a.movel_imm(dv, D0);
+          a.movel_d_push(D0);
+          pushed++;
+        }
+      }
+      // Source procs read all declared params from fixed frame offsets too, so
+      // pad omitted trailing args with their default expressions (DEF a=def).
+      else if (!isBin && Array.isArray(procInfo.args) && e.args.length < procInfo.args.length) {
+        for (let i = e.args.length; i < procInfo.args.length; i++) {
+          const init = procInfo.args[i]?.init;
+          if (init != null) this.exp(init, ctx); else a.moveq(0, D0);
           a.movel_d_push(D0);
           pushed++;
         }

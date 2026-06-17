@@ -49,7 +49,7 @@ const EVO_BUILTINS = {
     arg(cg, e, 2, ctx); a.movel_dd(D0, D2);     // size
     a.movel_pop_a(A1);                          // b
     a.movel_pop_a(A0);                          // a
-    const loop = cg.uniq('mcmp'), eq = cg.uniq('mcmpe'), lt = cg.uniq('mcmpl'),
+    const loop = cg.uniq('mcmp'), eq = cg.uniq('mcmpe'),
       gt = cg.uniq('mcmpg'), done = cg.uniq('mcmpd');
     a.label(loop);
     a.tstl(D2); a.bcc(COND.LE, eq);             // ran out equal
@@ -59,7 +59,7 @@ const EVO_BUILTINS = {
     a.cmpl_dd(D1, D0);                          // a - b
     a.bcc(COND.EQ, loop);
     a.bcc(COND.GT, gt);
-    a.label(lt); a.moveq(-1, D0); a.bra(done);
+    a.moveq(-1, D0); a.bra(done);
     a.label(gt); a.moveq(1, D0); a.bra(done);
     a.label(eq); a.moveq(0, D0);
     a.label(done);
