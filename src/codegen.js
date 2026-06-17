@@ -1659,6 +1659,7 @@ export class Codegen {
       nargs: args.length,
       epilogue: this.uniq('ep'),
       loopEnds: [],
+      loopConts: [],   // CONT targets (parallel to loopEnds)
     };
     for (const arg of args) if (arg.type) ctx.types.set(arg.name, arg.type);
     let frame = 0;
@@ -1972,21 +1973,20 @@ export class Codegen {
         break;
       }
       case 'If': {
+        // E-VO IFN/ELSEIFN invert the branch sense (skip body when cond TRUE).
+        const skip = (neg, target) => { a.tstl(D0); if (neg) a.bne(target); else a.beq(target); };
         const elseL = this.uniq('else'), endL = this.uniq('endif');
         this.exp(s.cond, ctx);
-        a.tstl(D0);
-        a.beq(s.elifs?.length || s.else ? elseL : endL);
+        skip(s.neg, s.elifs?.length || s.else ? elseL : endL);
         for (const st of s.then) this.stat(st, ctx);
         if (s.elifs?.length || s.else) {
           a.bra(endL);
           a.label(elseL);
-          let chain = elseL;
           for (let i = 0; i < (s.elifs?.length ?? 0); i++) {
             const ei = s.elifs[i];
             this.exp(ei.cond, ctx);
-            a.tstl(D0);
             const next = this.uniq('elif');
-            a.beq(i + 1 < s.elifs.length || s.else ? next : endL);
+            skip(ei.neg, i + 1 < s.elifs.length || s.else ? next : endL);
             for (const st of ei.body) this.stat(st, ctx);
             a.bra(endL);
             a.label(next);
@@ -1997,47 +1997,70 @@ export class Codegen {
         break;
       }
       case 'While': {
+        // E-VO generalised WHILE: each iteration tries the WHILE/ELSEWHILE[N]
+        // branches top-down; the first whose condition matches runs its body
+        // then the ALWAYS part; if none match the loop exits.
         const top = this.uniq('wh'), end = this.uniq('whend');
+        const alwaysL = s.always ? this.uniq('whalw') : top;
         ctx.loopEnds.push(end);
+        ctx.loopConts.push(alwaysL);   // CONT re-enters via ALWAYS (or top)
         a.label(top);
-        this.exp(s.cond, ctx);
-        a.tstl(D0);
-        a.beq(end);
-        for (const st of s.body) this.stat(st, ctx);
-        a.bra(top);
+        for (const b of s.branches) {
+          const next = this.uniq('whnext');
+          this.exp(b.cond, ctx);
+          a.tstl(D0);
+          if (b.neg) a.bne(next); else a.beq(next);
+          for (const st of b.body) this.stat(st, ctx);
+          a.bra(alwaysL);
+          a.label(next);
+        }
+        a.bra(end);   // no branch matched
+        if (s.always) {
+          a.label(alwaysL);
+          for (const st of s.always) this.stat(st, ctx);
+          a.bra(top);
+        }
         a.label(end);
         ctx.loopEnds.pop();
+        ctx.loopConts.pop();
         break;
       }
       case 'Repeat': {
         const top = this.uniq('rp'), end = this.uniq('rpend');
         ctx.loopEnds.push(end);
+        ctx.loopConts.push(top);
         a.label(top);
         for (const st of s.body) this.stat(st, ctx);
         this.exp(s.cond, ctx);
         a.tstl(D0);
-        a.beq(top);
+        // REPEAT..UNTIL loops while cond FALSE; UNTILN loops while cond TRUE.
+        if (s.neg) a.bne(top); else a.beq(top);
         a.label(end);
         ctx.loopEnds.pop();
+        ctx.loopConts.pop();
         break;
       }
       case 'Loop': {
         const top = this.uniq('lp'), end = this.uniq('lpend');
         ctx.loopEnds.push(end);
+        ctx.loopConts.push(top);
         a.label(top);
         for (const st of s.body) this.stat(st, ctx);
         a.bra(top);
         a.label(end);
         ctx.loopEnds.pop();
+        ctx.loopConts.pop();
         break;
       }
       case 'For': {
         const top = this.uniq('for'), end = this.uniq('forend');
         const step = s.step ? this.sem.foldConst(s.step) : 1;
         if (step === null) { this.err(s, 'tracer: STEP must be constant'); break; }
+        const cont = this.uniq('forcont');
         this.exp(s.from, ctx);
         this.storeVar(s.var, ctx, s);
         ctx.loopEnds.push(end);
+        ctx.loopConts.push(cont);   // CONT skips to the increment+retest
         a.label(top);
         this.exp(s.to, ctx);
         a.movel_dd(D0, D1);
@@ -2045,6 +2068,7 @@ export class Codegen {
         a.cmpl_dd(D1, D0);                       // var - limit
         a.bcc(step > 0 ? COND.GT : COND.LT, end);
         for (const st of s.body) this.stat(st, ctx);
+        a.label(cont);
         const r = this.varRef(s.var, ctx);
         const an = r.kind === 'global' ? A4 : A5;
         if (step >= 1 && step <= 8) a.addql_disp(step, r.disp, an);
@@ -2058,6 +2082,7 @@ export class Codegen {
         a.bra(top);
         a.label(end);
         ctx.loopEnds.pop();
+        ctx.loopConts.pop();
         break;
       }
       case 'Exit': {
@@ -2066,8 +2091,19 @@ export class Codegen {
         if (s.cond) {
           this.exp(s.cond, ctx);
           a.tstl(D0);
-          a.bne(end);
+          // EXIT cond exits when TRUE; EXITN exits when FALSE.
+          if (s.neg) a.beq(end); else a.bne(end);
         } else a.bra(end);
+        break;
+      }
+      case 'Cont': {   // E-VO loop continue (CONTN = inverted condition)
+        const cont = ctx.loopConts[ctx.loopConts.length - 1];
+        if (!cont) { this.err(s, 'CONT outside loop'); break; }
+        if (s.cond) {
+          this.exp(s.cond, ctx);
+          a.tstl(D0);
+          if (s.neg) a.beq(cont); else a.bne(cont);
+        } else a.bra(cont);
         break;
       }
       case 'Inc': case 'Dec':

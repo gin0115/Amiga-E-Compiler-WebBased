@@ -402,9 +402,9 @@ class Parser {
     if (t.type === 'kw') {
       switch (t.value) {
         case 'DEF': return this.parseDef(false);
-        case 'IF': return this.parseIf();
+        case 'IF': case 'IFN': return this.parseIf();
         case 'FOR': return this.parseFor();
-        case 'WHILE': return this.parseWhile();
+        case 'WHILE': case 'WHILEN': return this.parseWhile();
         case 'REPEAT': return this.parseRepeat();
         case 'LOOP': return this.parseLoop();
         case 'SELECT': return this.parseSelect();
@@ -429,12 +429,21 @@ class Parser {
           this.expectNl();
           return { kind: t.value === 'INC' ? 'Inc' : 'Dec', lval };
         }
-        case 'EXIT': {
+        case 'EXIT': case 'EXITN': {
+          const neg = t.value === 'EXITN';
           this.next();
           let cond = null;
           if (!this.at('nl')) cond = this.parseExp();
           this.expectNl();
-          return { kind: 'Exit', cond };
+          return { kind: 'Exit', cond, neg };
+        }
+        case 'CONT': case 'CONTN': {   // E-VO loop continue (CONTN = inverted)
+          const neg = t.value === 'CONTN';
+          this.next();
+          let cond = null;
+          if (!this.at('nl')) cond = this.parseExp();
+          this.expectNl();
+          return { kind: 'Cont', cond, neg };
         }
         case 'VOID': {
           this.next();
@@ -537,6 +546,7 @@ class Parser {
   }
 
   parseIf() {
+    const neg = this.peek().value === 'IFN';   // E-VO inverted IF
     this.next();
     const cond = this.parseExp();
     if (this.eat('kw', 'THEN')) {
@@ -553,21 +563,23 @@ class Parser {
         this.softElse++;
         const els = [this.parseStat()].filter(Boolean);
         this.softElse--;
-        return { kind: 'If', cond, then: [then].filter(Boolean), elifs: [], else: els, oneLine: true };
+        return { kind: 'If', cond, neg, then: [then].filter(Boolean), elifs: [], else: els, oneLine: true };
       }
-      return { kind: 'If', cond, then: [then].filter(Boolean), elifs: [], else: null, oneLine: true };
+      return { kind: 'If', cond, neg, then: [then].filter(Boolean), elifs: [], else: null, oneLine: true };
     }
     this.expectNl();
-    const then = this.parseStats(['ELSEIF', 'ELSE', 'ENDIF']);
-    return this.parseIfTail(cond, then);
+    const then = this.parseStats(['ELSEIF', 'ELSEIFN', 'ELSE', 'ENDIF']);
+    return this.parseIfTail(cond, then, neg);
   }
 
-  parseIfTail(cond, then) {
+  parseIfTail(cond, then, neg) {
     const elifs = [];
-    while (this.eat('kw', 'ELSEIF')) {
+    while (this.atKw('ELSEIF') || this.atKw('ELSEIFN')) {
+      const en = this.peek().value === 'ELSEIFN';   // E-VO inverted ELSEIF
+      this.next();
       const c = this.parseExp();
       this.expectNl();
-      elifs.push({ cond: c, body: this.parseStats(['ELSEIF', 'ELSE', 'ENDIF']) });
+      elifs.push({ cond: c, neg: en, body: this.parseStats(['ELSEIF', 'ELSEIFN', 'ELSE', 'ENDIF']) });
     }
     let els = null;
     if (this.eat('kw', 'ELSE')) {
@@ -576,7 +588,7 @@ class Parser {
     }
     this.expect('kw', 'ENDIF');
     this.expectNl();
-    return { kind: 'If', cond, then, elifs, else: els };
+    return { kind: 'If', cond, neg, then, elifs, else: els };
   }
 
   parseFor() {
@@ -600,27 +612,43 @@ class Parser {
   }
 
   parseWhile() {
+    const neg = this.peek().value === 'WHILEN';   // E-VO inverted WHILE
     this.next();
     const cond = this.parseExp();
     if (this.eat('kw', 'DO')) {
       const body = this.parseStat();
-      return { kind: 'While', cond, body: [body].filter(Boolean), oneLine: true };
+      return { kind: 'While', branches: [{ cond, neg, body: [body].filter(Boolean) }], always: null, oneLine: true };
     }
     this.expectNl();
-    const body = this.parseStats(['ENDWHILE']);
+    // E-VO: WHILE may carry ELSEWHILE[N] alternate conditions and an ALWAYS part.
+    const term = ['ELSEWHILE', 'ELSEWHILEN', 'ALWAYS', 'ENDWHILE'];
+    const branches = [{ cond, neg, body: this.parseStats(term) }];
+    while (this.atKw('ELSEWHILE') || this.atKw('ELSEWHILEN')) {
+      const en = this.peek().value === 'ELSEWHILEN';
+      this.next();
+      const c = this.parseExp();
+      this.expectNl();
+      branches.push({ cond: c, neg: en, body: this.parseStats(term) });
+    }
+    let always = null;
+    if (this.eat('kw', 'ALWAYS')) {
+      this.expectNl();
+      always = this.parseStats(['ENDWHILE']);
+    }
     this.expect('kw', 'ENDWHILE');
     this.expectNl();
-    return { kind: 'While', cond, body };
+    return { kind: 'While', branches, always };
   }
 
   parseRepeat() {
     this.next();
     this.expectNl();
-    const body = this.parseStats(['UNTIL']);
-    this.expect('kw', 'UNTIL');
+    const body = this.parseStats(['UNTIL', 'UNTILN']);
+    const neg = this.atKw('UNTILN');   // E-VO inverted UNTIL
+    if (neg) this.next(); else this.expect('kw', 'UNTIL');
     const cond = this.parseExp();
     this.expectNl();
-    return { kind: 'Repeat', body, cond };
+    return { kind: 'Repeat', body, cond, neg };
   }
 
   parseLoop() {

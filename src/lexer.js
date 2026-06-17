@@ -15,6 +15,9 @@ export const KEYWORDS = new Set([
   'PROC', 'PTR', 'PUBLIC', 'RAISE', 'REPEAT', 'RETURN', 'SELECT', 'SET',
   'SIZEOF', 'STEP', 'STRING', 'SUPER', 'THEN', 'TO', 'UNTIL', 'VOID',
   'WHILE',
+  // E-VO negative / extended control flow.
+  'IFN', 'ELSEIFN', 'WHILEN', 'ELSEWHILE', 'ELSEWHILEN', 'ALWAYS', 'UNTILN',
+  'EXITN', 'CONT', 'CONTN',
 ]);
 
 // Compile-time character escapes (ch_2F). Runtime format codes (\d \h \s \c
