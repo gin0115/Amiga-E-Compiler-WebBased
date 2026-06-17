@@ -64,9 +64,37 @@ const EVO_BUILTINS = {
     a.label(eq); a.moveq(0, D0);
     a.label(done);
   },
+
+  // ---- List allocation/length ---- (elist: maxlen.w@-4, len.w@-2, item.l@0)
+  // List(n): allocate an n-item complex elist (len 0) -> ptr or NIL.
+  List(cg, e, ctx, a) { arg(cg, e, 0, ctx); a.bsr('__newlist'); },
+  // SetList(list, len): set the list length word.
+  SetList(cg, e, ctx, a) {
+    arg(cg, e, 0, ctx); a.movel_d_push(D0);
+    arg(cg, e, 1, ctx); a.movel_dd(D0, D1);
+    a.movel_pop_d(D0);
+    a.movel_da(D0, A0);
+    a.movew_d_disp(D1, -2, A0);
+  },
 };
 
 // Emit the E-VO shared runtime routines (called once from emitRuntime).
 export function emitEvoRuntime(cg) {
-  // (string/list helper routines will be added here as families land)
+  const a = cg.a;
+  // __newlist: d0 = item count -> d0 = complex elist ptr (or 0). Layout mirrors
+  // __newstring: link.l@-8, maxlen.w@-4, len.w@-2, items@0 (4-byte items).
+  const done = cg.uniq('nl_done');
+  a.label('__newlist');
+  a.movel_dd(D0, D4);                 // D4 = n (item count)
+  a.asll_imm(2, D0);                  // n*4 bytes of items
+  a.addql(8, D0);                     // + link.l + maxlen.w + len.w
+  a.addql(4, D0);                     // + one spare slot (terminator headroom)
+  a.bsr('__new');
+  a.tstl(D0);
+  a.beq(done);
+  a.movel_da(D0, A0);
+  a.movew_d_disp(D4, 4, A0);          // maxlen (link@0, len@6 stay 0)
+  a.addql(8, D0);                     // -> items pointer
+  a.label(done);
+  a.rts();
 }

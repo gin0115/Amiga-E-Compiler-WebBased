@@ -118,4 +118,87 @@ PROC InStri(s:PTR TO CHAR, sub:PTR TO CHAR, start=0)
     i:=i+1
   ENDWHILE
 ENDPROC -1
+
+-> ===== List family ===== (elist items via PTR TO LONG indexing)
+
+PROC ListCopy(dest:PTR TO LONG, src:PTR TO LONG, count=-1)
+  DEF i, max
+  IF count=-1 THEN count:=ListLen(src)
+  max:=ListMax(dest)
+  IF count>max THEN count:=max
+  FOR i:=0 TO count-1 DO dest[i]:=src[i]
+  SetList(dest, count)
+ENDPROC
+
+PROC ListAdd(dest:PTR TO LONG, src:PTR TO LONG, count=-1)
+  DEF dl, max, i, n
+  dl:=ListLen(dest); max:=ListMax(dest)
+  IF count=-1 THEN count:=ListLen(src)
+  n:=0
+  FOR i:=0 TO count-1
+    IF dl+n<max
+      dest[dl+n]:=src[i]
+      n:=n+1
+    ENDIF
+  ENDFOR
+  SetList(dest, dl+n)
+ENDPROC
+
+PROC ListAddItem(list:PTR TO LONG, item)
+  DEF len
+  len:=ListLen(list)
+  IF len<ListMax(list)
+    list[len]:=item
+    SetList(list, len+1)
+  ENDIF
+ENDPROC
+
+PROC ListInsItem(list:PTR TO LONG, item, pos)
+  DEF len, i
+  len:=ListLen(list)
+  IF len<ListMax(list)
+    FOR i:=len-1 TO pos STEP -1 DO list[i+1]:=list[i]
+    list[pos]:=item
+    SetList(list, len+1)
+  ENDIF
+ENDPROC
+
+PROC ListRemItem(list:PTR TO LONG, pos)
+  DEF len, i
+  len:=ListLen(list)
+  FOR i:=pos TO len-2 DO list[i]:=list[i+1]
+  SetList(list, len-1)
+ENDPROC
+
+PROC ListSwapItem(list:PTR TO LONG, i, j)
+  DEF t
+  t:=list[i]; list[i]:=list[j]; list[j]:=t
+ENDPROC
+
+PROC ListItem(list:PTR TO LONG, idx)
+ENDPROC list[idx]
+
+PROC ListCmp(l1:PTR TO LONG, l2:PTR TO LONG, count=-1)
+  DEF i, n1, n2
+  n1:=ListLen(l1); n2:=ListLen(l2)
+  IF count=-1
+    IF n1<>n2 THEN RETURN FALSE
+    count:=n1
+  ELSE
+    IF (n1<count) OR (n2<count) THEN RETURN FALSE
+  ENDIF
+  FOR i:=0 TO count-1
+    IF l1[i]<>l2[i] THEN RETURN FALSE
+  ENDFOR
+ENDPROC TRUE
+
+PROC ListClone(src:PTR TO LONG)
+  DEF len, d:PTR TO LONG, i
+  len:=ListLen(src)
+  d:=List(len)
+  IF d
+    FOR i:=0 TO len-1 DO d[i]:=src[i]
+    SetList(d, len)
+  ENDIF
+ENDPROC d
 `;
