@@ -97,4 +97,14 @@ export function emitEvoRuntime(cg) {
   a.addql(8, D0);                     // -> items pointer
   a.label(done);
   a.rts();
+
+  // __astringf: like __stringf but into a plain char array (chars + NUL, NO
+  // estring length header). d0=dest, a0=fmt, a1=&first arg.
+  a.label('__astringf');
+  a.movem_push(0x3030);               // d2-d3/a2-a3
+  a.movel_da(D0, A2);                 // out
+  a.bsr('__format');
+  a.clrb_ind(A2);                     // NUL-terminate
+  a.movem_pop(0x0c0c);
+  a.rts();
 }

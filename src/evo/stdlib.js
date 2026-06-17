@@ -201,4 +201,34 @@ PROC ListClone(src:PTR TO LONG)
     SetList(d, len)
   ENDIF
 ENDPROC d
+
+-> ===== Astr family ===== (plain char arrays, no estring header)
+
+PROC AstrCopy(d:PTR TO CHAR, s:PTR TO CHAR)
+  DEF i=0
+  WHILE s[i]
+    d[i]:=s[i]; i:=i+1
+  ENDWHILE
+  d[i]:=0
+ENDPROC d
+
+PROC AstpCopy(d:PTR TO CHAR, s:PTR TO CHAR, n=-1)
+  DEF i=0, lim
+  lim:=n-1            -> n counts the NUL terminator
+  WHILE s[i] AND ((n=-1) OR (i<lim))
+    d[i]:=s[i]; i:=i+1
+  ENDWHILE
+  d[i]:=0
+ENDPROC d+i
+
+PROC AstrClone(s:PTR TO CHAR, len=-1)
+  DEF n, d:PTR TO CHAR, i
+  n:=StrLen(s)
+  IF (len<>-1) AND (len<n) THEN n:=len
+  d:=String(n)
+  IF d
+    FOR i:=0 TO n-1 DO d[i]:=s[i]
+    d[i]:=0
+  ENDIF
+ENDPROC d
 `;

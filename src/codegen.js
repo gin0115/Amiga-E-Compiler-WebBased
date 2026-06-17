@@ -3099,21 +3099,24 @@ export class Codegen {
         else a.addal_imm(pop, A7);
         return;
       }
-      if (callee.name === 'WriteF' || callee.name === 'StringF') {
+      // AstringF (E-VO) shares StringF's shape but formats into a plain char
+      // array (no estring length header).
+      if (callee.name === 'WriteF' || callee.name === 'StringF' ||
+        (this.evo && callee.name === 'AstringF')) {
         // ALL arguments evaluate left-to-right (E order; oracle-verified by
         // side-effecting args). Pushed L→R, so the runtimes walk descending.
-        const isStringF = callee.name === 'StringF';
+        const isStringF = callee.name === 'StringF' || callee.name === 'AstringF';
         const fixed = isStringF ? 2 : 1;     // StringF(est, fmt, ...) WriteF(fmt, ...)
         const n = e.args.length - fixed;
         for (const arg of e.args) {
           this.exp(arg, ctx);
           a.movel_d_push(D0);
         }
-        if (isStringF) a.movel_disp_d(4 * (n + 1), A7, D0);   // est
+        if (isStringF) a.movel_disp_d(4 * (n + 1), A7, D0);   // est / dest
         a.movel_disp_a(4 * n, A7, A0);                        // fmt
         if (n > 0) a.lea_disp(4 * (n - 1), A7, A1);           // &arg1
         else a.movel_aa(A7, A1);
-        a.bsr(isStringF ? '__stringf' : '__writef');
+        a.bsr(callee.name === 'AstringF' ? '__astringf' : isStringF ? '__stringf' : '__writef');
         const pop = 4 * e.args.length;
         if (pop <= 8) a.addql_a(pop, A7);
         else a.addal_imm(pop, A7);
