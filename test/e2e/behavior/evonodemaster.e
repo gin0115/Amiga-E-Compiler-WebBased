@@ -1,4 +1,3 @@
--> evo
 MODULE 'afc/nodemaster'
 OBJECT stuff
   avg

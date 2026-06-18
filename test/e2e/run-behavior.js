@@ -50,11 +50,7 @@ for (const f of readdirSync(BEH).filter(f => f.endsWith('.e')).sort()) {
     copyFileSync(join(BEH, aux), join(work, aux));
   }
   try {
-    // E-VO fixtures opt in with a `-> evo` marker on the first line (a native-
-    // safe comment), so they compile with the E-VO language extensions.
-    const isEvo = /^->\s*evo\b/i.test(readFileSync(join(work, f), 'latin1').split('\n')[0]);
     const eccArgs = [ECC, `--source=${join(work, f)}`, `--out=${join(work, name)}`, '--quiet'];
-    if (isEvo) eccArgs.push('--evo');
     execFileSync('node', eccArgs, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
     const out = execFileSync(vamos,
       ['-q', '-O', FAKE, '-V', `work:${work}`, '--cwd', 'work:', `work:${name}`],

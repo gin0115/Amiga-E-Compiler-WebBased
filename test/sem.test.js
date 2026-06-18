@@ -8,14 +8,6 @@ function sem(src) {
   return analyze(program);
 }
 
-// evo-mode analyze (parse + sem both with {evo:true})
-function semE(src) {
-  const { program, errors } = parse(src, '<input>', { evo: true });
-  if (errors.length) throw new Error('parse errors: ' + JSON.stringify(errors));
-  return analyze(program, { evo: true });
-}
-const byteWordErr = e => /BYTE\/WORD/.test(e.msg);
-
 test('clean hello world has no errors', a => {
   const s = sem("PROC main()\n  WriteF('hi\\n')\nENDPROC");
   a.deepEqual(s.errors, []);
@@ -98,46 +90,4 @@ test('call to undefined proc caught, builtins fine', a => {
 test('self is defined in methods', a => {
   const s = sem('OBJECT o\n  x:LONG\nENDOBJECT\nPROC get() OF o IS self.x\nPROC main() IS 0');
   a.deepEqual(s.errors, []);
-});
-
-// ---- E-VO BYTE/WORD type rules (match real EC v3.3a + real E-VO) ----
-// Verified against both oracles:
-//   DEF b:BYTE (scalar)  -> EC REJECTS ("unknown keyword"), E-VO REJECTS ("illegal type")
-//   ARRAY OF BYTE        -> E-VO ok ; EC has no BYTE at all
-//   PTR TO BYTE          -> E-VO ok
-//   object member :BYTE  -> E-VO ok
-
-test('E-VO: scalar DEF b:BYTE is rejected (array-element/ptr/member only)', a => {
-  const s = semE('PROC main()\n  DEF b:BYTE\n  b:=65\nENDPROC');
-  a.ok(s.errors.some(byteWordErr), 'expected a BYTE/WORD error, got ' + JSON.stringify(s.errors));
-});
-
-test('E-VO: scalar DEF w:WORD is rejected', a => {
-  const s = semE('PROC main()\n  DEF w:WORD\n  w:=5000\nENDPROC');
-  a.ok(s.errors.some(byteWordErr));
-});
-
-test('E-VO: ARRAY OF BYTE / WORD is allowed (no BYTE/WORD error)', a => {
-  const s = semE('PROC main()\n  DEF a[4]:ARRAY OF BYTE, w[4]:ARRAY OF WORD\n  a[0]:=1\n  w[0]:=2\nENDPROC');
-  a.ok(!s.errors.some(byteWordErr), 'array-of-byte must be allowed: ' + JSON.stringify(s.errors));
-});
-
-test('E-VO: PTR TO BYTE is allowed', a => {
-  const s = semE('PROC main()\n  DEF p:PTR TO BYTE, a[4]:ARRAY OF BYTE\n  p:=a\n  p[0]:=65\nENDPROC');
-  a.ok(!s.errors.some(byteWordErr), JSON.stringify(s.errors));
-});
-
-test('E-VO: BYTE object member is allowed', a => {
-  const s = semE('OBJECT thing\n  b:BYTE\nENDOBJECT\nPROC main()\n  DEF t:thing\n  t.b:=65\nENDPROC');
-  a.ok(!s.errors.some(byteWordErr), JSON.stringify(s.errors));
-});
-
-test('native: DEF b:BYTE requires E-VO mode (EC has no BYTE)', a => {
-  const s = sem('PROC main()\n  DEF b:BYTE\n  b:=65\nENDPROC');
-  a.ok(s.errors.some(byteWordErr), 'native scalar BYTE must error: ' + JSON.stringify(s.errors));
-});
-
-test('native: ARRAY OF BYTE requires E-VO mode', a => {
-  const s = sem('PROC main()\n  DEF a[4]:ARRAY OF BYTE\n  a[0]:=1\nENDPROC');
-  a.ok(s.errors.some(byteWordErr), 'native ARRAY OF BYTE must error: ' + JSON.stringify(s.errors));
 });

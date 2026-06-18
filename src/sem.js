@@ -43,36 +43,6 @@ export class Sem {
   err(node, msg) { this.errors.push({ line: node?.line, msg }); }
   warn(node, msg) { this.warnings.push({ line: node?.line, msg }); }
 
-  // --- E-VO BYTE/WORD type rules (verified vs real EC v3.3a + real E-VO) ---
-  // Native EC has no BYTE/WORD at all -> any mention is an error. E-VO allows
-  // them ONLY as array elements, pointer targets, or object members -- never as
-  // a scalar variable/arg/global. In native mode BYTE/WORD aren't keywords so
-  // they reach here as an (undefined) OBJECT type name; in evo mode as base
-  // BYTE/WORD.
-  typeHasByteWord(t) {
-    if (!t) return false;
-    if (t.base === 'BYTE' || t.base === 'WORD') return true;
-    if (t.base === 'OBJECT' && (t.name === 'BYTE' || t.name === 'WORD')) return true;
-    if (t.base === 'ARRAY') return this.typeHasByteWord(t.of);
-    if (t.base === 'PTR') return this.typeHasByteWord(t.to);
-    return false;
-  }
-  isScalarByteWord(t) {
-    return !!t && (t.base === 'BYTE' || t.base === 'WORD'
-      || (t.base === 'OBJECT' && (t.name === 'BYTE' || t.name === 'WORD')));
-  }
-  // Validate a scalar declaration's type (DEF local, proc arg, global DEF).
-  checkScalarType(decl, node) {
-    const t = decl?.type;
-    if (!t) return;
-    if (!this.evo) {
-      if (this.typeHasByteWord(t)) this.err(node, 'BYTE/WORD require E-VO mode');
-    } else if (this.isScalarByteWord(t)) {
-      this.err(node, 'BYTE/WORD are valid only as array elements (ARRAY OF BYTE), ' +
-        'pointer targets, or object members — not as a scalar variable');
-    }
-  }
-
   analyze(program, opts = {}) {
     // pass 0: pull in binary module interfaces (consts, objects, lib funcs).
     // E predeclares the exec/dos/intuition/graphics library calls — model
@@ -153,7 +123,7 @@ export class Sem {
         }
         case 'Object': this.defObject(d); break;
         case 'Def':
-          for (const v of d.decls) { this.checkScalarType(v, d); this.globals.set(v.name, { decl: v }); }
+          for (const v of d.decls) { this.globals.set(v.name, { decl: v }); }
           break;
       }
     }
@@ -241,8 +211,6 @@ export class Sem {
     const members = new Map(parent ? parent.members : []);
     let offset = parent ? parent.size : 0;
     const place = (m, at) => {
-      // E-VO allows BYTE/WORD object members; native EC has no such types.
-      if (!this.evo && this.typeHasByteWord(m.type)) this.err(d, 'BYTE/WORD require E-VO mode');
       const size = typeSize(m.type);
       const count = m.size ? (this.foldConst(m.size) ?? 1) : 1;
       if (size > 1 && (at & 1)) at++;   // align INT/LONG to even like ec
@@ -252,28 +220,7 @@ export class Sem {
       members.set(m.name, { offset: at, size: embedded ? 0 : size, type: m.type, count });
       return at + size * count;
     };
-    for (let i = 0; i < d.members.length;) {
-      const m = d.members[i];
-      if (m.unionId === undefined) {
-        offset = place(m, offset);
-        i++;
-        continue;
-      }
-      // E-VO UNION: each group lays out from the union base; size = max group.
-      const uid = m.unionId;
-      if (offset & 1) offset++;
-      const base = offset;
-      let end = base, cur = null, g = base;
-      let j = i;
-      for (; j < d.members.length && d.members[j].unionId === uid; j++) {
-        const um = d.members[j];
-        if (um.unionGroup !== cur) { cur = um.unionGroup; g = base; }
-        g = place(um, g);
-        if (g > end) end = g;
-      }
-      offset = end;
-      i = j;
-    }
+    for (const m of d.members) offset = place(m, offset);
     if (offset & 1) offset++;
     this.objects.set(d.name, { name: d.name, of: d.of, members, size: offset });
   }
@@ -330,7 +277,7 @@ export class Sem {
   checkProc(p) {
     const scope = new Map();
     scope.set('self', {});
-    for (const a of p.args) { this.checkScalarType(a, p); scope.set(a.name, { decl: a }); }
+    for (const a of p.args) { scope.set(a.name, { decl: a }); }
     const walkStats = stats => { for (const s of stats ?? []) this.checkStat(s, scope, p); };
     walkStats(p.body);
     walkStats(p.except);
@@ -344,7 +291,6 @@ export class Sem {
       case 'Def':
         for (const v of s.decls) {
           if (scope.has(v.name)) this.warn(s, `duplicate DEF ${v.name} in ${p.name}`);
-          this.checkScalarType(v, s);
           scope.set(v.name, { decl: v });
           if (v.init) this.checkExp(v.init, scope, p);
         }
@@ -368,12 +314,10 @@ export class Sem {
         walk(s.body);
         break;
       case 'While':
-        for (const b of s.branches) { this.checkExp(b.cond, scope, p); walk(b.body); }
-        if (s.always) walk(s.always);
+        this.checkExp(s.cond, scope, p); walk(s.body);
         break;
       case 'Repeat': this.checkExp(s.cond, scope, p); walk(s.body); break;
       case 'Loop': walk(s.body); break;
-      case 'Try': walk(s.body); walk(s.catch); break;   // E-VO block exceptions
       case 'Select':
         this.checkExp(s.subject, scope, p);
         if (s.of) this.checkExp(s.of, scope, p);
@@ -388,8 +332,7 @@ export class Sem {
         walk(s.default);
         break;
       case 'Return': for (const e of s.exps) this.checkExp(e, scope, p); break;
-      case 'Exit': case 'Cont': if (s.cond) this.checkExp(s.cond, scope, p); break;
-      case 'Swap': this.checkExp(s.a, scope, p); this.checkExp(s.b, scope, p); break;
+      case 'Exit': if (s.cond) this.checkExp(s.cond, scope, p); break;
       case 'Inc': case 'Dec': this.checkExp(s.lval, scope, p); break;
       case 'NewStat': for (const t of s.targets) this.checkNewTarget(t, scope, p); break;
       case 'EndStat': for (const t of s.targets) this.checkExp(t, scope, p); break;
@@ -447,15 +390,8 @@ export class Sem {
         for (const a of e.args) this.checkExp(a, scope, p);
         break;
       }
-      case 'Bin': case 'Logical': this.checkExp(e.l, scope, p); this.checkExp(e.r, scope, p); break;
-      case 'QuickCompare':   // E-VO  exp == [v, lo TO hi, ...]
-        this.checkExp(e.exp, scope, p);
-        for (const it of e.items) {
-          if (it.val !== undefined) this.checkExp(it.val, scope, p);
-          else { this.checkExp(it.from, scope, p); this.checkExp(it.to, scope, p); }
-        }
-        break;
-      case 'Neg': case 'Not': case 'FloatConv': case 'FloatPrefix': case 'Quote': case 'Paren': this.checkExp(e.exp, scope, p); break;
+      case 'Bin': this.checkExp(e.l, scope, p); this.checkExp(e.r, scope, p); break;
+      case 'Neg': case 'FloatConv': case 'FloatPrefix': case 'Quote': case 'Paren': this.checkExp(e.exp, scope, p); break;
       case 'AssignExp': this.checkExp(e.target, scope, p); this.checkExp(e.exp, scope, p); break;
       case 'Ternary': this.checkExp(e.cond, scope, p); this.checkExp(e.then, scope, p); this.checkExp(e.else, scope, p); break;
       case 'List': for (const i of e.items) this.checkExp(i, scope, p); break;
@@ -482,6 +418,5 @@ export class Sem {
 
 export function analyze(program, opts = {}) {
   const sem = new Sem();
-  sem.evo = !!opts.evo;   // E-VO extension mode (carried through to codegen)
   return sem.analyze(program, opts);
 }

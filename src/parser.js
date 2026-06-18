@@ -4,7 +4,6 @@
 // PRIVATE/PUBLIC/EXPORT). Expressions have NO precedence: strict left-to-right
 // fold (oracle-verified: 1+2*3 = 9).
 import { lex } from './lexer.js';
-import { EVO_STDLIB_SRC } from './evo/stdlib.js';
 
 const BINOPS = new Set(['+', '-', '*', '/', '=', '<>', '<', '>', '<=', '>=', '<=>', '!']);
 const KWBINOPS = new Set(['AND', 'OR']);
@@ -25,7 +24,6 @@ function continuesLine(t) {
 class Parser {
   constructor(tokens, filename, opts = {}) {
     this.filename = filename;
-    this.evo = !!opts.evo;   // E-VO extension mode (default: native EC v3.3a)
     this.toks = [];
     let prev = null;
     for (const t of tokens) {
@@ -239,8 +237,7 @@ class Parser {
       if (this.eat('kw', 'OF')) of = this.parseType();
       return { base: 'ARRAY', of };
     }
-    // BYTE/WORD are E-VO primitive types (keywords only in evo mode).
-    for (const t of ['LONG', 'INT', 'CHAR', 'STRING', 'LIST', 'BYTE', 'WORD']) {
+    for (const t of ['LONG', 'INT', 'CHAR', 'STRING', 'LIST']) {
       if (this.eat('kw', t)) return { base: t };
     }
     const id = this.eat('ident') ?? this.eat('upper') ?? this.eat('ecall');
@@ -254,20 +251,9 @@ class Parser {
       this.expect('ident', undefined, 'variable name');
     const decl = { name: name?.value ?? '?', size: null, type: null, init: null };
     if (this.at('[')) {
-      if (this.evo) {
-        // E-VO multi-dimensional arrays: DEF m[3][3]:ARRAY OF LONG
-        decl.dims = [];
-        while (this.eat('[')) {
-          decl.dims.push(this.parseExp());
-          this.expect(']');
-        }
-        decl.size = decl.dims[0];
-      } else {
-        // native EC: a single dimension
-        this.next();
-        decl.size = this.parseExp();
-        this.expect(']');
-      }
+      this.next();
+      decl.size = this.parseExp();
+      this.expect(']');
     }
     // '=default' and ':type' occur in either order (corpus: name=NIL:PTR TO LONG)
     for (;;) {
@@ -302,49 +288,12 @@ class Parser {
     let access = this.eat('kw', 'PRIVATE') ? 'private' : null;
     this.expectNl();
     const members = [];
-    let unionCounter = 0;
     this.skipNl();
     while (!this.atKw('ENDOBJECT') && !this.at('eof')) {
       // PRIVATE/PUBLIC may stand alone or prefix members on the same line
       if (this.atKw('PRIVATE') || this.atKw('PUBLIC')) {
         access = this.next().value === 'PRIVATE' ? 'private' : 'public';
         if (this.at('nl')) { this.next(); this.skipNl(); continue; }
-      }
-      // E-VO UNION: overlapping member groups. Each [..] group lays its members
-      // sequentially from the union base; groups overlap; size = max group.
-      if (this.atKw('UNION')) {
-        this.next();
-        const uid = ++unionCounter;
-        this.skipNl();
-        // optional outer bracket form: UNION [ [..],[..] ]
-        let outer = false;
-        if (this.at('[') && this.peek(1).type === '[') { this.next(); this.skipNl(); outer = true; }
-        else if (this.at('[')) {
-          // disambiguate a lone outer '[' from a group '[': look past newlines
-          let j = 1; while (this.peek(j).type === 'nl') j++;
-          if (this.peek(j).type === '[') { this.next(); this.skipNl(); outer = true; }
-        }
-        let group = 0;
-        while (this.at('[')) {
-          this.next();   // group open '['
-          this.skipNl();
-          while (!this.at(']') && !this.at('eof')) {
-            const m = this.parseVarDecl();
-            m.access = access; m.unionId = uid; m.unionGroup = group;
-            members.push(m);
-            if (!this.eat(',')) this.skipNl();
-            this.skipNl();
-          }
-          this.expect(']');
-          group++;
-          this.eat(',');
-          this.skipNl();
-        }
-        if (outer) { this.expect(']'); this.skipNl(); }
-        this.expect('kw', 'ENDUNION');
-        this.expectNl();
-        this.skipNl();
-        continue;
       }
       {
         do {
@@ -454,10 +403,9 @@ class Parser {
     if (t.type === 'kw') {
       switch (t.value) {
         case 'DEF': return this.parseDef(false);
-        case 'IF': case 'IFN': return this.parseIf();
-        case 'TRY': return this.parseTry();   // E-VO block-scoped exceptions
+        case 'IF': return this.parseIf();
         case 'FOR': return this.parseFor();
-        case 'WHILE': case 'WHILEN': return this.parseWhile();
+        case 'WHILE': return this.parseWhile();
         case 'REPEAT': return this.parseRepeat();
         case 'LOOP': return this.parseLoop();
         case 'SELECT': return this.parseSelect();
@@ -482,21 +430,12 @@ class Parser {
           this.expectNl();
           return { kind: t.value === 'INC' ? 'Inc' : 'Dec', lval };
         }
-        case 'EXIT': case 'EXITN': {
-          const neg = t.value === 'EXITN';
+        case 'EXIT': {
           this.next();
           let cond = null;
           if (!this.at('nl')) cond = this.parseExp();
           this.expectNl();
-          return { kind: 'Exit', cond, neg };
-        }
-        case 'CONT': case 'CONTN': {   // E-VO loop continue (CONTN = inverted)
-          const neg = t.value === 'CONTN';
-          this.next();
-          let cond = null;
-          if (!this.at('nl')) cond = this.parseExp();
-          this.expectNl();
-          return { kind: 'Cont', cond, neg };
+          return { kind: 'Exit', cond, neg: false };
         }
         case 'VOID': {
           this.next();
@@ -580,28 +519,10 @@ class Parser {
     }
     // assignment or expression statement
     const exp = this.parseExp();
-    // E-VO swap: a :=: b  (lexed as ':=' then an adjacent ':')
-    if (this.evo) {
-      const t0 = this.peek(), t1 = this.peek(1);
-      if (t0.type === ':=' && t1.type === ':' && t1.line === t0.line && t1.col === t0.col + 2) {
-        this.next(); this.next();
-        const rhs = this.parseExp();
-        this.expectNl();
-        return { kind: 'Swap', a: exp, b: rhs };
-      }
-    }
     if (this.eat(':=')) {
       const rhs = this.parseExp();
       this.expectNl();
       return { kind: 'Assign', target: exp, exp: rhs };
-    }
-    // E-VO compound assignment: desugar 'lval OP= rhs' to 'lval := lval OP rhs'.
-    const ca = this.evo ? this.peekCompoundAssign() : null;
-    if (ca) {
-      this.next(); this.next();   // consume the two operator tokens
-      const rhs = this.parseExp();
-      this.expectNl();
-      return { kind: 'Assign', target: exp, exp: { kind: 'Bin', op: ca.op, l: exp, r: rhs } };
     }
     this.expectNl();
     if (exp.kind === 'AssignExp') return { kind: 'Assign', target: exp.target, exp: exp.exp };
@@ -609,7 +530,6 @@ class Parser {
   }
 
   parseIf() {
-    const neg = this.peek().value === 'IFN';   // E-VO inverted IF
     this.next();
     const cond = this.parseExp();
     if (this.eat('kw', 'THEN')) {
@@ -626,23 +546,22 @@ class Parser {
         this.softElse++;
         const els = [this.parseStat()].filter(Boolean);
         this.softElse--;
-        return { kind: 'If', cond, neg, then: [then].filter(Boolean), elifs: [], else: els, oneLine: true };
+        return { kind: 'If', cond, then: [then].filter(Boolean), elifs: [], else: els, oneLine: true };
       }
-      return { kind: 'If', cond, neg, then: [then].filter(Boolean), elifs: [], else: null, oneLine: true };
+      return { kind: 'If', cond, then: [then].filter(Boolean), elifs: [], else: null, oneLine: true };
     }
     this.expectNl();
-    const then = this.parseStats(['ELSEIF', 'ELSEIFN', 'ELSE', 'ENDIF']);
-    return this.parseIfTail(cond, then, neg);
+    const then = this.parseStats(['ELSEIF', 'ELSE', 'ENDIF']);
+    return this.parseIfTail(cond, then);
   }
 
-  parseIfTail(cond, then, neg) {
+  parseIfTail(cond, then) {
     const elifs = [];
-    while (this.atKw('ELSEIF') || this.atKw('ELSEIFN')) {
-      const en = this.peek().value === 'ELSEIFN';   // E-VO inverted ELSEIF
+    while (this.atKw('ELSEIF')) {
       this.next();
       const c = this.parseExp();
       this.expectNl();
-      elifs.push({ cond: c, neg: en, body: this.parseStats(['ELSEIF', 'ELSEIFN', 'ELSE', 'ENDIF']) });
+      elifs.push({ cond: c, body: this.parseStats(['ELSEIF', 'ELSE', 'ENDIF']) });
     }
     let els = null;
     if (this.eat('kw', 'ELSE')) {
@@ -651,7 +570,7 @@ class Parser {
     }
     this.expect('kw', 'ENDIF');
     this.expectNl();
-    return { kind: 'If', cond, neg, then, elifs, else: els };
+    return { kind: 'If', cond, then, elifs, else: els };
   }
 
   parseFor() {
@@ -675,55 +594,27 @@ class Parser {
   }
 
   parseWhile() {
-    const neg = this.peek().value === 'WHILEN';   // E-VO inverted WHILE
     this.next();
     const cond = this.parseExp();
     if (this.eat('kw', 'DO')) {
       const body = this.parseStat();
-      return { kind: 'While', branches: [{ cond, neg, body: [body].filter(Boolean) }], always: null, oneLine: true };
+      return { kind: 'While', cond, body: [body].filter(Boolean), oneLine: true };
     }
     this.expectNl();
-    // E-VO: WHILE may carry ELSEWHILE[N] alternate conditions and an ALWAYS part.
-    const term = ['ELSEWHILE', 'ELSEWHILEN', 'ALWAYS', 'ENDWHILE'];
-    const branches = [{ cond, neg, body: this.parseStats(term) }];
-    while (this.atKw('ELSEWHILE') || this.atKw('ELSEWHILEN')) {
-      const en = this.peek().value === 'ELSEWHILEN';
-      this.next();
-      const c = this.parseExp();
-      this.expectNl();
-      branches.push({ cond: c, neg: en, body: this.parseStats(term) });
-    }
-    let always = null;
-    if (this.eat('kw', 'ALWAYS')) {
-      this.expectNl();
-      always = this.parseStats(['ENDWHILE']);
-    }
+    const body = this.parseStats(['ENDWHILE']);
     this.expect('kw', 'ENDWHILE');
     this.expectNl();
-    return { kind: 'While', branches, always };
+    return { kind: 'While', cond, body };
   }
 
   parseRepeat() {
     this.next();
     this.expectNl();
-    const body = this.parseStats(['UNTIL', 'UNTILN']);
-    const neg = this.atKw('UNTILN');   // E-VO inverted UNTIL
-    if (neg) this.next(); else this.expect('kw', 'UNTIL');
+    const body = this.parseStats(['UNTIL']);
+    this.expect('kw', 'UNTIL');
     const cond = this.parseExp();
     this.expectNl();
-    return { kind: 'Repeat', body, cond, neg };
-  }
-
-  parseTry() {   // E-VO: TRY <body> CATCH <handler> ENDTRY
-    this.next();
-    this.expectNl();
-    const body = this.parseStats(['CATCH', 'ENDTRY']);
-    this.expect('kw', 'CATCH');
-    this.expectNl();
-    const handler = this.parseStats(['ENDTRY']);
-    this.expect('kw', 'ENDTRY');
-    this.expectNl();
-    return { kind: 'Try', body, catch: handler };
+    return { kind: 'Repeat', body, cond };
   }
 
   parseLoop() {
@@ -774,13 +665,6 @@ class Parser {
       const rhs = this.parseChain();
       exp = { kind: 'But', first: exp, value: rhs };
     }
-    // E-VO C-style ternary: cond ? then : else
-    if (this.evo && this.eat('?')) {
-      const then = this.parseChain();
-      this.expect(':');
-      const els = this.parseChain();
-      exp = { kind: 'Ternary', cond: exp, then, else: els };
-    }
     return exp;
   }
 
@@ -791,100 +675,39 @@ class Parser {
     if (neg) left = { kind: 'Neg', exp: left };
     for (;;) {
       const t = this.peek();
-      // E-VO compound assignment (x += 5, a AND= 1, x <<= 3): stop the chain so
-      // the statement parser sees 'lval OP= rhs' instead of consuming OP here.
-      if (this.evo && this.peekCompoundAssign()) break;
-      let op = null, shiftPair = false;
-      // E-VO / modern E: an adjacent '<<' / '>>' is a symbol alias for SHL/SHR.
-      // Lexed as two '<' / '>' tokens so nested lisp cells still close with
-      // '>>'; only pair them outside a cell (cellDepth 0).
-      const t2 = this.peek(1);
-      // E-VO quick-compare: exp == [v, lo TO hi, ...]  (== lexed as two '=').
-      if (this.evo && t.type === '=' && t2.type === '=' && t2.line === t.line && t2.col === t.col + 1) {
-        this.next(); this.next();
-        this.expect('[');
-        const items = [];
-        do {
-          const e = this.parseExp();
-          if (this.eat('kw', 'TO')) items.push({ from: e, to: this.parseExp() });
-          else items.push({ val: e });
-        } while (this.eat(','));
-        this.expect(']');
-        left = { kind: 'QuickCompare', exp: left, items };
-        continue;
-      }
-      if (this.evo && (t.type === '<' || t.type === '>') && this.cellDepth === 0 &&
-        t2.type === t.type && t2.line === t.line && t2.col === t.col + 1) {
-        op = t.type === '<' ? 'SHL' : 'SHR';
-        shiftPair = true;
-      }
-      else if (this.evo && t.type === '&') op = 'AND';   // E-VO: & is bitwise AND
-      else if (this.evo && t.type === '|' && t2.type === '|' && this.cellDepth === 0 &&
-        t2.line === t.line && t2.col === t.col + 1) { op = 'OR'; shiftPair = true; }   // E-VO: || is bitwise OR
-      else if (BINOPS.has(t.type)) op = t.type;
+      let op = null;
+      if (BINOPS.has(t.type)) op = t.type;
       else if (t.type === 'kw' && KWBINOPS.has(t.value)) op = t.value;
       else if (t.type === 'upper' && ['SHL', 'SHR', 'XOR'].includes(t.value)) op = t.value;
-      // E-VO short-circuit boolean operators.
-      else if (this.evo && t.type === 'upper' && (t.value === 'ANDALSO' || t.value === 'ORELSE')) op = t.value;
       if (!op) break;
       if (op === '>' && this.cellDepth > 0) break;
-      if (op === '|' && this.cellDepth > 0) break;
       this.next();
-      if (shiftPair) this.next();   // consume the second '<' / '>' of the pair
       // '!' may be a postfix float-conversion with no right operand
       if (op === '!' && !this.atItemStart()) {
         left = { kind: 'FloatConv', exp: left };
         continue;
       }
       const right = this.parseItem();
-      // ANDALSO/ORELSE short-circuit — distinct node so codegen branches
-      // instead of eagerly evaluating both operands.
-      if (op === 'ANDALSO' || op === 'ORELSE') left = { kind: 'Logical', op, l: left, r: right };
-      else left = { kind: 'Bin', op, l: left, r: right };
+      left = { kind: 'Bin', op, l: left, r: right };
     }
     return left;
-  }
-
-  // E-VO compound-assignment operator at the current position, or null.
-  // Returns the equivalent binary op and how many tokens it spans. Lexed as
-  // separate tokens, so we require them to be physically adjacent:
-  //   +=  -=  *=  /=   ->  the simple op then '='
-  //   AND= OR=          ->  the keyword then '='
-  //   <<= >>=           ->  '<' then '<=' (resp. '>' then '>=')  (lexer munch)
-  peekCompoundAssign() {
-    const t = this.peek(), t2 = this.peek(1);
-    const adj = t2.line === t.line && t.col + (t.raw ? t.raw.length : 1) === t2.col;
-    if (!adj) return null;
-    if (t2.type === '=') {
-      if (t.type === '+' || t.type === '-' || t.type === '*' || t.type === '/') return { op: t.type, n: 2 };
-      if (t.type === 'kw' && (t.value === 'AND' || t.value === 'OR')) return { op: t.value, n: 2 };
-    }
-    if (t.type === '<' && t2.type === '<=') return { op: 'SHL', n: 2 };
-    if (t.type === '>' && t2.type === '>=') return { op: 'SHR', n: 2 };
-    return null;
   }
 
   atItemStart() {
     const t = this.peek();
     return ['int', 'float', 'str', 'char', 'ident', 'ecall', 'upper',
-      '(', '[', '{', '`', '^', '-', '~', '<'].includes(t.type) ||
+      '(', '[', '{', '`', '^', '-', '<'].includes(t.type) ||
       (t.type === 'kw' && ['IF', 'SIZEOF', 'NEW', 'NIL', 'SUPER'].includes(t.value));
   }
 
   parseItem() {
     const t = this.peek();
-    // E-VO / modern E: unary bitwise complement — 'NOT x' or '~x'.
-    if (this.evo && t.type === 'upper' && t.value === 'NOT') {
-      this.next();
-      return { kind: 'Not', exp: this.parseItem() };
-    }
     switch (t.type) {
       case 'int': case 'float': this.next(); return { kind: t.type === 'int' ? 'Num' : 'Float', value: t.value };
       case 'str': this.next(); return { kind: 'Str', value: t.value };
       case 'char': this.next(); return { kind: 'Char', value: t.value };
       case '-': this.next(); return { kind: 'Neg', exp: this.parseItem() };
       case '!': this.next(); return { kind: 'FloatPrefix', exp: this.parseItem() };
-      case '~': if (this.evo) { this.next(); return { kind: 'Not', exp: this.parseItem() }; } break;
       case '(': {
         this.next();
         this.skipNl();
@@ -927,15 +750,9 @@ class Parser {
         return { kind: 'Deref', lval };
       }
       case 'ident': case 'ecall': case 'upper': {
-        // E-VO predefined macro: _SRCLINE_ -> the current source line number.
-        if (this.evo && t.value === '_SRCLINE_') { this.next(); return { kind: 'Num', value: t.line }; }
         const ref = this.parseRef();
         // grammar item: var ":=" exp — assignment expression without parens.
-        // But a ':=' immediately followed by ':' is the E-VO swap operator
-        // (a :=: b); leave it for the statement parser.
-        const nx = this.peek(1);
-        const isSwap = this.evo && nx.type === ':' && nx.line === this.peek().line && nx.col === this.peek().col + 2;
-        if (this.at(':=') && !isSwap) {
+        if (this.at(':=')) {
           this.next();
           // full expression RHS so statement assignments capture ternary/BUT
           // (r := x>3 ? 100 : 200), not just the binary chain.
@@ -961,43 +778,13 @@ class Parser {
           case 'SIZEOF': {
             this.next();
             const tt = this.peek();
-            if (tt.type === 'kw' && ['LONG', 'INT', 'CHAR', 'PTR', 'BYTE', 'WORD'].includes(tt.value)) {
+            if (tt.type === 'kw' && ['LONG', 'INT', 'CHAR', 'PTR'].includes(tt.value)) {
               this.next();
               return { kind: 'Sizeof', name: tt.value };
             }
             const id = this.eat('ident') ?? this.eat('ecall') ??
               this.expect('ident', undefined, 'object name');
             return { kind: 'Sizeof', name: id?.value };
-          }
-          case 'PSIZEOF': {   // E-VO: like SIZEOF but pointer types -> 4
-            this.next();
-            const tt = this.peek();
-            if (tt.type === 'kw' && ['LONG', 'INT', 'CHAR', 'PTR', 'BYTE', 'WORD'].includes(tt.value)) {
-              this.next();
-              return { kind: 'Psizeof', name: tt.value };
-            }
-            const id = this.eat('ident') ?? this.eat('ecall') ??
-              this.expect('ident', undefined, 'object name');
-            return { kind: 'Psizeof', name: id?.value };
-          }
-          case 'OFFSETOF': {   // E-VO: OFFSETOF objtype.member
-            this.next();
-            const ot = this.eat('ident') ?? this.eat('upper') ?? this.eat('ecall') ??
-              this.expect('ident', undefined, 'object type');
-            this.expect('.');
-            const m = this.eat('ident') ?? this.eat('upper') ?? this.eat('ecall') ??
-              this.expect('ident', undefined, 'member');
-            return { kind: 'Offsetof', objType: ot?.value, member: m?.value };
-          }
-          case 'ARRAYSIZE': {   // E-VO: ARRAYSIZE [dim,] arrayvar
-            this.next();
-            const e1 = this.parseChain();
-            if (this.eat(',')) {
-              const id = this.eat('ident') ?? this.eat('ecall') ?? this.eat('upper') ??
-                this.expect('ident', undefined, 'array variable');
-              return { kind: 'Arraysize', dim: e1, name: id?.value };
-            }
-            return { kind: 'Arraysize', dim: { kind: 'Num', value: 1 }, name: e1?.name };
           }
           case 'NEW': {
             this.next();
@@ -1122,34 +909,5 @@ export function parse(src, filename = '<input>', opts = {}) {
   } catch (e) {
     if (!(e instanceof TooManyErrors)) throw e;
   }
-  // E-VO: inject the referenced stdlib procs (StrAddChar, List*, …) written in
-  // E. Skipped while parsing the stdlib itself (_stdlib) to avoid recursion.
-  if (opts.evo && !opts._stdlib && program) injectEvoStdlib(program);
   return { program, errors: [...lexErrors, ...p.errors] };
-}
-
-// Collect the names of all called functions anywhere in an AST subtree.
-function collectCallNames(node, out) {
-  if (!node || typeof node !== 'object') return;
-  if (Array.isArray(node)) { for (const x of node) collectCallNames(x, out); return; }
-  if (node.kind === 'Call' && node.callee && typeof node.callee.name === 'string') out.add(node.callee.name);
-  for (const k in node) { if (k !== 'kind') collectCallNames(node[k], out); }
-}
-
-// Pull in only the EVO stdlib procs the program actually uses (transitively).
-function injectEvoStdlib(program) {
-  if (!program.procs) return;
-  const { program: lib } = parse(EVO_STDLIB_SRC, '<evo-stdlib>', { evo: true, _stdlib: true });
-  if (!lib || !lib.procs) return;
-  const byName = new Map(lib.procs.map(pr => [pr.name, pr]));
-  const used = new Set();
-  collectCallNames(program.procs, used);
-  const needed = new Set(), queue = [];
-  for (const n of used) if (byName.has(n) && !needed.has(n)) { needed.add(n); queue.push(n); }
-  while (queue.length) {
-    const inner = new Set();
-    collectCallNames(byName.get(queue.pop()), inner);
-    for (const n of inner) if (byName.has(n) && !needed.has(n)) { needed.add(n); queue.push(n); }
-  }
-  for (const n of needed) program.procs.push(byName.get(n));
 }

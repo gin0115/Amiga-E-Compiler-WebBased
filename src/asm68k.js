@@ -77,7 +77,7 @@ export class Asm {
   // ---- lea / pea ----
   // Load a label's address. Emitted as `lea xxx.L,An` (absolute long + reloc)
   // rather than `lea d16(PC),An`, so it reaches anywhere in the hunk — large
-  // programs (e.g. the 107KB EVO unittests) exceed the ±32KB PC-relative range.
+  // programs exceed the ±32KB PC-relative range.
   // 68000-safe; behaviourally identical (same effective address).
   lea_pc(label, an) {
     this.w16(0x41f9 | an << 9);                          // lea xxx.L,An

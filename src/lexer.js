@@ -1,5 +1,3 @@
-import { EVO_KEYWORDS } from './evo/keywords.js';
-
 // Amiga E lexer. Ground truth: amiga-e/docs/reference/ch_1.md (format),
 // ch_2.md (immediate values), ch_18.md (grammar, lexical section).
 //
@@ -43,9 +41,7 @@ export function lex(src, filename = '<input>', opts = {}) {
   const errors = [];
   const n = src.length;
   let i = 0, line = 1, col = 1;
-  // E-VO mode folds the extension keywords into the keyword set; in native
-  // (EC v3.3a) mode they stay ordinary identifiers/constants.
-  const keywords = opts.evo ? new Set([...KEYWORDS, ...EVO_KEYWORDS]) : KEYWORDS;
+  const keywords = KEYWORDS;
 
   const err = msg => errors.push({ filename, line, col, msg });
   const push = (type, value, raw, startLine, startCol) =>
@@ -91,9 +87,9 @@ export function lex(src, filename = '<input>', opts = {}) {
       continue;
     }
 
-    // line comment: '->' (classic Amiga E), or '//' in E-VO / modern E mode.
+    // line comment: '->' (classic Amiga E).
     // The '/*' block comment above is matched first, and a lone '/' divides.
-    if ((c === '-' && src[i + 1] === '>') || (opts.evo && c === '/' && src[i + 1] === '/')) {
+    if (c === '-' && src[i + 1] === '>') {
       while (i < n && src[i] !== '\n') { i++; col++; }
       continue;
     }
@@ -111,12 +107,6 @@ export function lex(src, filename = '<input>', opts = {}) {
         }
         if (ch === '\\') {
           const e = src[i + 1];
-          // E-VO extra escapes: \! = bell (7), \xNN = hex char
-          if (opts.evo && e === '!') { value += '\x07'; raw += '\\!'; i += 2; col += 2; continue; }
-          if (opts.evo && e === 'x' && /^[0-9A-Fa-f]{2}$/.test(src.slice(i + 2, i + 4))) {
-            value += String.fromCharCode(parseInt(src.slice(i + 2, i + 4), 16));
-            raw += '\\x' + src.slice(i + 2, i + 4); i += 4; col += 4; continue;
-          }
           raw += ch + (e ?? '');
           if (ESCAPES.has(e)) value += String.fromCharCode(ESCAPES.get(e));
           else value += '\\' + (e ?? '');
