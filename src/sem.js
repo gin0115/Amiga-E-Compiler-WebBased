@@ -43,6 +43,36 @@ export class Sem {
   err(node, msg) { this.errors.push({ line: node?.line, msg }); }
   warn(node, msg) { this.warnings.push({ line: node?.line, msg }); }
 
+  // --- E-VO BYTE/WORD type rules (verified vs real EC v3.3a + real E-VO) ---
+  // Native EC has no BYTE/WORD at all -> any mention is an error. E-VO allows
+  // them ONLY as array elements, pointer targets, or object members -- never as
+  // a scalar variable/arg/global. In native mode BYTE/WORD aren't keywords so
+  // they reach here as an (undefined) OBJECT type name; in evo mode as base
+  // BYTE/WORD.
+  typeHasByteWord(t) {
+    if (!t) return false;
+    if (t.base === 'BYTE' || t.base === 'WORD') return true;
+    if (t.base === 'OBJECT' && (t.name === 'BYTE' || t.name === 'WORD')) return true;
+    if (t.base === 'ARRAY') return this.typeHasByteWord(t.of);
+    if (t.base === 'PTR') return this.typeHasByteWord(t.to);
+    return false;
+  }
+  isScalarByteWord(t) {
+    return !!t && (t.base === 'BYTE' || t.base === 'WORD'
+      || (t.base === 'OBJECT' && (t.name === 'BYTE' || t.name === 'WORD')));
+  }
+  // Validate a scalar declaration's type (DEF local, proc arg, global DEF).
+  checkScalarType(decl, node) {
+    const t = decl?.type;
+    if (!t) return;
+    if (!this.evo) {
+      if (this.typeHasByteWord(t)) this.err(node, 'BYTE/WORD require E-VO mode');
+    } else if (this.isScalarByteWord(t)) {
+      this.err(node, 'BYTE/WORD are valid only as array elements (ARRAY OF BYTE), ' +
+        'pointer targets, or object members — not as a scalar variable');
+    }
+  }
+
   analyze(program, opts = {}) {
     // pass 0: pull in binary module interfaces (consts, objects, lib funcs).
     // E predeclares the exec/dos/intuition/graphics library calls — model
@@ -123,7 +153,7 @@ export class Sem {
         }
         case 'Object': this.defObject(d); break;
         case 'Def':
-          for (const v of d.decls) this.globals.set(v.name, { decl: v });
+          for (const v of d.decls) { this.checkScalarType(v, d); this.globals.set(v.name, { decl: v }); }
           break;
       }
     }
@@ -157,7 +187,7 @@ export class Sem {
       if (mod.isCodeModule && obj.methods && obj.methods.length && !this.binaryClasses?.has(k)) {
         this.binaryClasses = this.binaryClasses ?? new Map();
         const methods = new Map();
-        for (const me of obj.methods) methods.set(me.name, { slot: me.slot ?? me.offset, args: me.args, kind: me.kind });
+        for (const me of obj.methods) methods.set(me.name, { slot: me.slot ?? me.offset, args: me.args, ndef: me.ndef ?? 0, defaults: me.defaults ?? [], kind: me.kind });
         this.binaryClasses.set(k, {
           name: k, module: name, osize: obj.size, delsize: obj.delsize,
           delcode: obj.delcode, odestr: obj.odestr, methods,
@@ -211,6 +241,8 @@ export class Sem {
     const members = new Map(parent ? parent.members : []);
     let offset = parent ? parent.size : 0;
     const place = (m, at) => {
+      // E-VO allows BYTE/WORD object members; native EC has no such types.
+      if (!this.evo && this.typeHasByteWord(m.type)) this.err(d, 'BYTE/WORD require E-VO mode');
       const size = typeSize(m.type);
       const count = m.size ? (this.foldConst(m.size) ?? 1) : 1;
       if (size > 1 && (at & 1)) at++;   // align INT/LONG to even like ec
@@ -298,7 +330,7 @@ export class Sem {
   checkProc(p) {
     const scope = new Map();
     scope.set('self', {});
-    for (const a of p.args) scope.set(a.name, { decl: a });
+    for (const a of p.args) { this.checkScalarType(a, p); scope.set(a.name, { decl: a }); }
     const walkStats = stats => { for (const s of stats ?? []) this.checkStat(s, scope, p); };
     walkStats(p.body);
     walkStats(p.except);
@@ -312,6 +344,7 @@ export class Sem {
       case 'Def':
         for (const v of s.decls) {
           if (scope.has(v.name)) this.warn(s, `duplicate DEF ${v.name} in ${p.name}`);
+          this.checkScalarType(v, s);
           scope.set(v.name, { decl: v });
           if (v.init) this.checkExp(v.init, scope, p);
         }

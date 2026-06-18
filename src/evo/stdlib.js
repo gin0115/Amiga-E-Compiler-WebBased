@@ -43,9 +43,10 @@ PROC StrAddChar(s:PTR TO CHAR, c)
 ENDPROC
 
 PROC StrClone(src:PTR TO CHAR)
-  DEF len, d:PTR TO CHAR
-  len:=StrLen(src)
-  d:=String(len)
+  DEF d:PTR TO CHAR
+  -> clone the source CAPACITY (StrMax), not just length, so a later StrAdd
+  -> has room to grow -- matches real E-VO.
+  d:=String(StrMax(src))
   IF d THEN StrCopy(d, src)
 ENDPROC d
 

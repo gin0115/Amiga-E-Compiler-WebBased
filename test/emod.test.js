@@ -90,3 +90,35 @@ test('interface module: no code fields', a => {
   a.ok(it.consts.size > 0);
   a.ok(it.objects.has('window'));          // classic intuition struct
 });
+
+// afc/NodeMaster.m: a class module whose only "unparsed" section is a trailing
+// JOB_MACROS (11) — all objects/methods/code are captured before it. That
+// benign trailing section must NOT mark the module `partial`, or the resolver
+// rejects an otherwise-complete OO module and its methods vanish (the
+// Sort_Example.e / `unknown method nodemaster` regression).
+const nm = mod('afc/NodeMaster.m');
+test('code module: trailing MACROS does not mark a complete module partial', a => {
+  a.equal(nm.version, 10);
+  a.equal(nm.isCodeModule, true);
+  a.equal(nm.error, null);
+  a.equal(nm.partial, false);                       // <- the fix
+});
+test('code module: NodeMaster constructor method is exposed', a => {
+  const cls = nm.objects.get('nodemaster');
+  a.ok(cls, 'nodemaster object present');
+  a.ok(cls.methods.some(m => m.name === 'nodemaster'), 'constructor method present');
+  a.ok(nm.methods.some(m => m.object === 'nodemaster' && m.name === 'sort'), 'sort method present');
+});
+
+// Binary OO methods can have default args ([NARGS][NDEF][default.l*NDEF] in the
+// method table). NodeMaster's add(item, pos=3) relies on pos defaulting to 3
+// (=append at tail); a caller passing only `item` must have pos=3 padded, or
+// add() takes the wrong branch and silently drops the node (Sort_Example bug).
+test('code module: OO method default args are captured', a => {
+  const add = nm.objects.get('nodemaster').methods.find(m => m.name === 'add');
+  a.equal(add.args, 2);
+  a.equal(add.ndef, 1);
+  a.deepEqual(add.defaults, [3]);
+  const sort = nm.objects.get('nodemaster').methods.find(m => m.name === 'sort');
+  a.deepEqual(sort.defaults, [0]);
+});
