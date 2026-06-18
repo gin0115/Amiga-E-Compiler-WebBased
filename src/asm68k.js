@@ -77,7 +77,7 @@ export class Asm {
   // ---- lea / pea ----
   // Load a label's address. Emitted as `lea xxx.L,An` (absolute long + reloc)
   // rather than `lea d16(PC),An`, so it reaches anywhere in the hunk — large
-  // programs (e.g. the 107KB EVO unittests) exceed the ±32KB PC-relative range.
+  // programs exceed the ±32KB PC-relative range.
   // 68000-safe; behaviourally identical (same effective address).
   lea_pc(label, an) {
     this.w16(0x41f9 | an << 9);                          // lea xxx.L,An
@@ -123,6 +123,12 @@ export class Asm {
   roll_d(dq, dn) { this.w16(0xe1b8 | dq << 9 | dn); }   // rol.l Dq,Dn
   rorl_d(dq, dn) { this.w16(0xe0b8 | dq << 9 | dn); }   // ror.l Dq,Dn
   eorl_dd(src, dst) { this.w16(0xb180 | src << 9 | dst); } // eor.l Ds,Dd
+  eoril_imm(imm, dn) { this.w16(0x0a80 | dn); this.w32(imm >>> 0); } // eori.l #i,Dn
+  movew_dd(src, dst) { this.w16(0x3000 | dst << 9 | src); }          // move.w Ds,Dd
+  subqw(q, dn) { this.w16(0x5140 | (q === 8 ? 0 : q) << 9 | dn); }   // subq.w #q,Dn
+  lsrw_imm(q, dn) { this.w16(0xe048 | (q === 8 ? 0 : q) << 9 | dn); } // lsr.w #q,Dn
+  tstw(dn) { this.w16(0x4a40 | dn); }                                // tst.w Dn
+  clrw_d(dn) { this.w16(0x4240 | dn); }                              // clr.w Dn
 
   // ---- immediate byte/word ops and extra moves for the runtime ----
   // 68020 32x32->32 long mul/div (used by ported EC intrinsic thunks I_MUL/I_DIV)

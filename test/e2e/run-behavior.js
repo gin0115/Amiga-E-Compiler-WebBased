@@ -50,8 +50,8 @@ for (const f of readdirSync(BEH).filter(f => f.endsWith('.e')).sort()) {
     copyFileSync(join(BEH, aux), join(work, aux));
   }
   try {
-    execFileSync('node', [ECC, `--source=${join(work, f)}`, `--out=${join(work, name)}`, '--quiet'],
-      { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+    const eccArgs = [ECC, `--source=${join(work, f)}`, `--out=${join(work, name)}`, '--quiet'];
+    execFileSync('node', eccArgs, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
     const out = execFileSync(vamos,
       ['-q', '-O', FAKE, '-V', `work:${work}`, '--cwd', 'work:', `work:${name}`],
       { encoding: 'latin1', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 });

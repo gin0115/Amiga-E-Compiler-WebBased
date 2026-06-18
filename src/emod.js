@@ -148,10 +148,16 @@ export function readEmod(buf, name = '<module>') {
               const mname = str(asclen);
               const nargs = uw();
               const ndef = uw();
-              o += ndef * 4;
+              // default values for the last `ndef` args (evaluated constants),
+              // exactly like JOB_PROCS. A caller omitting trailing args must
+              // push these, or the method reads garbage params (NodeMaster's
+              // add(item, pos=3) silently drops the node otherwise).
+              const mdefaults = [];
+              for (let i = 0; i < ndef; i++) mdefaults.push(l());
               objrec.methods.push({ name: mname, slot: moff, offset: moff, args: nargs,
-                kind: tf & 0xff });
-              out.methods.push({ object: oname, name: mname, slot: moff, offset: moff, args: nargs });
+                ndef, defaults: mdefaults, kind: tf & 0xff });
+              out.methods.push({ object: oname, name: mname, slot: moff, offset: moff,
+                args: nargs, ndef, defaults: mdefaults });
             }
             // OACC list — "object access": code offsets that reference THIS
             // class's descriptor pointer (same-module self/sibling NEW sites).
@@ -284,9 +290,16 @@ export function readEmod(buf, name = '<module>') {
             }
           }
         }
+      } else if (job === 10 || job === 11) {
+        // JOB_DEBUG (10) / JOB_MACROS (11) are trailing sections not needed for
+        // linking — code/procs/relocs/globs/consts/objects are all captured
+        // before them. Stop cleanly WITHOUT marking the module partial, so a
+        // complete OO class module (e.g. afc/NodeMaster) isn't rejected by the
+        // resolver and lose its methods.
+        break;
       } else {
-        // JOB_DEBUG (10) / MACROS (11) / unknown — not needed for linking;
-        // code/procs/relocs/globs/consts/objects are captured before these.
+        // a genuinely unknown job code: stop, but flag the module partial so the
+        // resolver treats it as incomplete (conservative).
         out.partial = true;
         break;
       }
