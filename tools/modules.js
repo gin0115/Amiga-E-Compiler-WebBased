@@ -1,6 +1,6 @@
 // Host-side module resolver: loads binary .m files from the canonical
 // E v3.3a v40 module set on demand.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readEmod } from '../src/emod.js';
@@ -16,6 +16,30 @@ const roots = [
 
 const cache = new Map();
 
+// Amiga filesystems are case-insensitive, so MODULE 'afc/nodemaster' resolves
+// the file afc/NodeMaster.m. On a case-sensitive host we must fold case too —
+// build a lazy index of lowercased "rel/path" (no .m) -> absolute file, first
+// root winning (research copy preferred, like the direct lookups below).
+let _ciIndex = null;
+function ciIndex() {
+  if (_ciIndex) return _ciIndex;
+  _ciIndex = new Map();
+  const walk = (dir, rel) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(join(dir, e.name), r);
+      else if (e.name.toLowerCase().endsWith('.m')) {
+        const k = r.slice(0, -2).toLowerCase();
+        if (!_ciIndex.has(k)) _ciIndex.set(k, join(dir, e.name));
+      }
+    }
+  };
+  for (const root of roots) walk(root, '');
+  return _ciIndex;
+}
+
 export function resolveModule(name) {
   const key = name.toLowerCase();
   if (cache.has(key)) return cache.get(key);
@@ -28,6 +52,11 @@ export function resolveModule(name) {
         break outer;
       } catch { /* try next */ }
     }
+  }
+  // case-insensitive fallback for mixed-case bundled files (NodeMaster.m, …)
+  if (!mod) {
+    const hit = ciIndex().get(key);
+    if (hit) { try { mod = readEmod(new Uint8Array(readFileSync(hit)), name); } catch { /* ignore */ } }
   }
   cache.set(key, mod);
   return mod;

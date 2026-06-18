@@ -24,6 +24,7 @@ options:
                     the program at boot (mount as DF0: in any emulator)
   --moduledir=DIR   extra directory to search for binary .m modules
                     (repeatable; like ec's EMODULES: assign)
+  --evo             enable E-VO (modern Amiga E) language extensions
   --warn            print semantic warnings
   --quiet           suppress informational output
   --version         print version
@@ -43,16 +44,17 @@ const oIdx = args.indexOf('-o');
 const output = flag('out') ?? (oIdx >= 0 ? args[oIdx + 1] : input.replace(/\.e$/i, ''));
 const quiet = args.includes('--quiet');
 const showWarn = args.includes('--warn');
+const evo = args.includes('--evo');
 const adfOut = flag('adf');
 const moduleDirs = args.filter(a => a.startsWith('--moduledir=')).map(a => a.slice(12));
 
 const src = readFileSync(input).toString('latin1');
-const { program, errors: parseErrors } = parse(src, input);
+const { program, errors: parseErrors } = parse(src, input, { evo });
 if (parseErrors.length) {
   for (const e of parseErrors) console.error(`${input}:${e.line}:${e.col} ${e.msg}`);
   process.exit(1);
 }
-const sem = analyze(program, { resolveModule: makeResolver(dirname(input), moduleDirs) });
+const sem = analyze(program, { evo, resolveModule: makeResolver(dirname(input), moduleDirs) });
 if (showWarn) for (const w of sem.warnings) console.error(`${input}:${w.line ?? '?'} warning: ${w.msg}`);
 if ((program.opts ?? []).some(o => /^MODULE/.test(o))) {
   const { writeEmod } = await import('../src/emodwrite.js');

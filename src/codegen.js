@@ -405,19 +405,12 @@ export class Codegen {
       a.movel_d_disp(D0, this.globalSlots.get('execbase'), A4);
     }
     {
-      // seed Rnd() from the clock: DateStamp into 12 scratch bytes
-      const seedSlot = this.globalSlot('__seed');
-      const scratch = this.globalSlot('__dsscratch');
-      this.globalSlot('__dsscratch2');
-      this.globalSlot('__dsscratch3');
-      a.lea_disp(scratch, A4, A0);
-      a.movel_ad(A0, D1);
-      a.movel_disp_a(this.globalSlot('dosbase'), A4, A6);
-      a.jsr_disp(-192, A6);              // DateStamp(d1)
-      a.movel_disp_d(scratch + 4, A4, D0);
-      a.movel_disp_d(scratch + 8, A4, D1);
-      a.eorl_dd(D1, D0);
-      a.movel_d_disp(D0, seedSlot, A4);
+      // Rnd() seed: EC v3.3a does NOT auto-seed — its seed static starts at 0
+      // and the program is expected to seed itself (Rnd(-RndQ(...))). Match that
+      // exactly: leave __seed at 0 (globals are zero-initialised) so ecomp's PRNG
+      // sequence is byte-identical to EC/E-VO.
+      this.globalSlot('__seed');
+      // (was: DateStamp-based clock seeding — diverged from EC's deterministic seed)
     }
     {
       // exec memory pool for the String()/List()/DisposeLink() intrinsics that
@@ -1400,6 +1393,51 @@ export class Codegen {
     a.label('__m32_done');
     a.movel_pop_d(D2);
     a.rts();
+
+    // __rndq: D0 = RndQ(D0) — one Galois-LFSR step (poly $1D872B41). EC-exact
+    // (I_RNDQ): seed<<1, and if the shifted-out MSB was set (or result 0), XOR.
+    a.label('__rndq');
+    a.addl_dd(D0, D0);                       // C = old bit31, Z if result 0
+    a.bcc(COND.HI, '__rndq_x');              // BHI (!C && !Z) -> skip XOR
+    a.eoril_imm(0x1D872B41, D0);
+    a.label('__rndq_x');
+    a.rts();
+
+    // __rnd: max at 4(A7) -> D0 = 0..max-1. EC's I_RND: run bitlength(max-1)
+    // LFSR steps on the __seed slot, then result = (seed.w * max) >> 16. A
+    // negative max sets the seed to -max. Byte-identical to EC v3.3a / E-VO.
+    {
+      const seedSlot = this.globalSlot('__seed');
+      a.label('__rnd');
+      a.movel_disp_d(4, A7, D2);             // D2 = max
+      a.tstl(D2);
+      a.bcc(COND.MI, '__rnd_set');           // max<0 -> set seed
+      a.movew_dd(D2, D1);                    // D1.w = max
+      a.subqw(1, D1);                        // D1.w = max-1
+      a.movel_disp_d(seedSlot, A4, D0);      // D0 = seed
+      a.label('__rnd_lp');
+      a.addl_dd(D0, D0);                     // LFSR step
+      a.bcc(COND.HI, '__rnd_x');
+      a.eoril_imm(0x1D872B41, D0);
+      a.label('__rnd_x');
+      a.lsrw_imm(1, D1);
+      a.bne('__rnd_lp');                     // repeat per bit of (max-1)
+      a.movel_d_disp(D0, seedSlot, A4);      // store advanced seed
+      a.tstw(D2);
+      a.bne('__rnd_mul');
+      a.swap(D0);                            // max==0: take high word
+      a.bra('__rnd_fin');
+      a.label('__rnd_mul');
+      a.muluw_dd(D2, D0);                    // (seed.w * max.w)
+      a.label('__rnd_fin');
+      a.clrw_d(D0);                          // zero low word
+      a.swap(D0);                            // high word -> result
+      a.rts();
+      a.label('__rnd_set');
+      a.negl(D2);
+      a.movel_d_disp(D2, seedSlot, A4);
+      a.rts();
+    }
 
     // __val: d0=str → d0=value, d1=chars consumed (handles -, $hex, %bin)
     a.label('__val');
@@ -2554,15 +2592,28 @@ export class Codegen {
 
   // obj.method(args): push args (left-to-right, same as binary procs), load
   // self into A0, then `(A0)->A1; (slot,A1)->A1; jsr (A1)`. Result in D0.
-  emitBinaryMethodCall(cls, slot, objExp, args, ctx) {
+  emitBinaryMethodCall(cls, slot, objExp, args, ctx, meth) {
     const a = this.a;
     for (const arg of args) { this.exp(arg, ctx); a.movel_d_push(D0); }
+    let pushed = args.length;
+    // Pad omitted trailing args with the method's declared defaults. Binary OO
+    // methods can have default params (e.g. NodeMaster add(item, pos=3)); the
+    // method reads ALL declared params from fixed frame offsets, so a caller
+    // that omits a defaulted arg must push its default value or the method
+    // reads garbage and misbehaves (silently dropping list nodes).
+    if (meth && meth.ndef && typeof meth.args === 'number') {
+      const declared = meth.args, nRequired = declared - meth.ndef;
+      for (let i = args.length; i < declared; i++) {
+        const dv = meth.defaults[i - nRequired] ?? 0;
+        a.movel_imm(dv, D0); a.movel_d_push(D0); pushed++;
+      }
+    }
     this.exp(objExp, ctx);                   // instance ptr -> D0
     a.movel_da(D0, A0);                      // self in A0
     a.movel_disp_a(0, A0, A1);               // A1 = descriptor = (A0)
     a.movel_disp_a(slot, A1, A1);            // A1 = descriptor[slot] = method
     a.jsr_ind(A1);
-    const pop = 4 * args.length;
+    const pop = 4 * pushed;
     if (pop) { if (pop <= 8) a.addql_a(pop, A7); else a.addal_imm(pop, A7); }
   }
 
@@ -2611,7 +2662,7 @@ export class Codegen {
         // merely matches the class name.
         const ctorM = bcls.methods.get(lval.callee.name) ??
           (bcls.ctorSlot != null ? { slot: bcls.ctorSlot } : null);
-        if (ctorM) this.emitBinaryMethodCall(bcls, ctorM.slot, objExp, lval.args, ctx);
+        if (ctorM) this.emitBinaryMethodCall(bcls, ctorM.slot, objExp, lval.args, ctx, ctorM);
         else this.err(node, `no constructor ${lval.callee.name} on ${bcls.name}`);
         this.exp(objExp, ctx);                   // expression value is the object
         return;
@@ -3396,27 +3447,16 @@ export class Codegen {
         }
       }
       if (callee.name === 'Rnd' || callee.name === 'RndQ') {
-        const seedSlot = this.globalSlot('__seed');
+        // EC-exact Galois-LFSR PRNG (poly $1D872B41), via __rnd/__rndq helpers.
         if (callee.name === 'RndQ') {
-          this.exp(e.args[0], ctx);      // caller-managed seed
-          a.movel_imm(1664525, D1);
-          a.bsr('__mul32');
-          a.movel_imm(1013904223, D1);
-          a.addl_dd(D1, D0);
+          this.exp(e.args[0], ctx);      // value -> D0
+          a.bsr('__rndq');               // D0 = RndQ(D0)
           return;
         }
-        this.exp(e.args[0], ctx);        // max
+        this.exp(e.args[0], ctx);        // max -> D0
         a.movel_d_push(D0);
-        a.movel_disp_d(seedSlot, A4, D0);
-        a.movel_imm(1664525, D1);
-        a.bsr('__mul32');
-        a.movel_imm(1013904223, D1);
-        a.addl_dd(D1, D0);
-        a.movel_d_disp(D0, seedSlot, A4);
-        a.lsrl_imm(1, D0);               // positive
-        a.movel_pop_d(D1);               // max
-        a.bsr('__udivmod');
-        a.movel_dd(D1, D0);              // remainder = 0..max-1
+        a.bsr('__rnd');                  // reads max at 4(A7), D0 = 0..max-1
+        a.addql_a(4, A7);                // pop the max arg
         return;
       }
       if (callee.name === 'Link') {
@@ -3752,7 +3792,7 @@ export class Codegen {
       if (bcls) {
         const m = bcls.methods.get(callee.name);
         if (!m) { this.err(e, `unknown method ${callee.name} on ${bcls.name}`); return; }
-        this.emitBinaryMethodCall(bcls, m.slot, callee.obj, e.args, ctx);
+        this.emitBinaryMethodCall(bcls, m.slot, callee.obj, e.args, ctx, m);
         return;
       }
       // method call o.m(args): static dispatch on the declared type,
